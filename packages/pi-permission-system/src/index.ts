@@ -289,6 +289,8 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     authorizerSelection,
     reporter,
     isYoloEnabled,
+    () => configStore.current().dryRun ?? false,
+    () => configStore.current().permissionMode,
   );
   const toolCallGatePipeline = new ToolCallGatePipeline(
     resolver,

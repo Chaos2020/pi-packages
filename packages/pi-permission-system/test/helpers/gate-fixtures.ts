@@ -6,6 +6,7 @@ import type { AskEscalator } from "#src/authority/authorizer-selection";
 import type { ShellToolsConfig } from "#src/config-schema";
 import type { DecisionReporter } from "#src/decision-reporter";
 import type { GateDescriptor } from "#src/handlers/gates/descriptor";
+import type { PermissionMode } from "#src/permission-modes";
 import { GateRunner } from "#src/handlers/gates/runner";
 import type { SkillInputGateInputs } from "#src/handlers/gates/skill-input-gate-pipeline";
 import type { ToolCallGateInputs } from "#src/handlers/gates/tool-call-gate-pipeline";
@@ -104,6 +105,8 @@ export function makeGateRunner(
     yolo?: boolean;
     /** Live yolo reader, for tests that toggle the setting between runs. */
     isYoloEnabled?: () => boolean;
+    dryRun?: boolean;
+    mode?: PermissionMode;
   } = {},
 ) {
   const reporter = makeReporter(overrides.reporter);
@@ -132,6 +135,8 @@ export function makeGateRunner(
     { escalate },
     reporter,
     isYoloEnabled,
+    () => (overrides as { dryRun?: boolean }).dryRun ?? false,
+    () => (overrides as { mode?: PermissionMode }).mode,
   );
   return {
     runner,

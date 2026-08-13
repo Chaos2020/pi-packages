@@ -326,6 +326,8 @@ export function makeHandler(overrides?: {
     prompter,
     reporter,
     () => overrides?.yolo ?? false,
+    () => false,
+    () => undefined,
   );
   const handler = new PermissionGateHandler(
     session,

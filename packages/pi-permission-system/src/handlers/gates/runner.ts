@@ -3,6 +3,7 @@ import type { PermissionPromptDecision } from "#src/authority/permission-dialog"
 import type { DecisionReporter } from "#src/decision-reporter";
 import { applyPermissionGate } from "#src/permission-gate";
 import { createPermissionRequestId } from "#src/permission-request-id";
+import { applyMode, type PermissionMode } from "#src/permission-modes";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import {
   renderPolicyDenial,
@@ -47,6 +48,10 @@ export class GateRunner {
      * effect — the same closure `PermissionManager` receives.
      */
     private readonly isYoloEnabled: () => boolean,
+    /** Feature 4: dry-run mode — record the would-be decision, never enforce. */
+    private readonly getDryRun: () => boolean,
+    /** Feature 6: session permission mode (default/acceptEdits/plan/bypass). */
+    private readonly getMode: () => PermissionMode | undefined,
   ) {}
 
   /**
@@ -110,6 +115,30 @@ export class GateRunner {
         input: descriptor.input,
         agentName: agentName ?? undefined,
       });
+    }
+
+    // 1a. Feature 6: apply session permission mode — only resolves `ask`;
+    // a configured deny/allow is never overridden by a mode.
+    if (check.state === "ask") {
+      const mode = this.getMode();
+      if (mode && mode !== "default") {
+        const resolved = applyMode(check.state, descriptor.surface, mode);
+        if (resolved !== check.state) {
+          check = { ...check, state: resolved, origin: "mode" };
+        }
+      }
+    }
+
+    // 1b. Feature 4: dry-run — record the would-be policy decision and allow
+    // through (no prompt, no block). Always allows; never enforces.
+    if (this.getDryRun()) {
+      this.reporter.writeReviewLog("permission_request.dry_run", {
+        ...descriptor.logContext,
+        agentName,
+        wouldBe: check.state,
+        tool: descriptor.surface,
+      });
+      return { action: "allow" };
     }
 
     // The fields every review-log write for this gate shares, whatever the

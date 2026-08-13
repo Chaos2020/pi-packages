@@ -32,6 +32,21 @@ export interface PermissionSystemExtensionConfig {
   shellTools?: ShellToolsConfig;
   /** Ordered names of registered live-authority chain links to consult before the terminal authorizer. */
   authorizerChain?: string[];
+  /**
+   * Feature 3: secret detection in tool output. When enabled, tool results are
+   * scanned for leaked secrets; `deny` redacts them in the result, `alert` only
+   * logs. `patterns` extends the built-ins; `excludeTools` skips tools.
+   */
+  secretScan?: {
+    enabled?: boolean;
+    action?: "deny" | "alert";
+    patterns?: string[];
+    excludeTools?: string[];
+  };
+  /** Feature 6: session permission mode (default/acceptEdits/plan/bypassPermissions). */
+  permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
+  /** Feature 4: dry-run mode. */
+  dryRun?: boolean;
 }
 
 export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {
