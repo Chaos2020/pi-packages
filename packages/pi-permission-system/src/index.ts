@@ -268,6 +268,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     sessionRules,
     authorizerSelection,
     reporter,
+    () => configStore.current().dryRun ?? false,
   );
   const toolCallGatePipeline = new ToolCallGatePipeline(
     resolver,

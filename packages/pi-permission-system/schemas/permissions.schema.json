@@ -25,6 +25,11 @@
       "default": false,
       "type": "boolean"
     },
+    "dryRun": {
+      "description": "Feature 4: dry-run / simulation mode. When true, every gate records the would-be policy decision (allow/ask/deny) as a `permission_request.dry_run` review entry and lets the tool proceed — no prompt, no block. For policy testing.",
+      "default": false,
+      "type": "boolean"
+    },
     "doublePressToConfirm": {
       "description": "Require a confirming second press of a decision hotkey in the inline permission dialog. Applies to TUI sessions only.",
       "markdownDescription": "Require a confirming second press of a decision hotkey (`y`/`s`/`n`/`r`) in the inline permission dialog before it commits — the first press arms the action and shows a `Press y again to approve.` hint.\n\nApplies to interactive **TUI** sessions only; the non-TUI (RPC/frontend) prompt keeps its single-select flow. Set to `false` to commit decisions on the first hotkey press.",

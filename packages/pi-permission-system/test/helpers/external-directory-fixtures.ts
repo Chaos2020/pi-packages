@@ -214,6 +214,7 @@ export function makeDedupWiring(prompter?: AskEscalator) {
     sessionRules,
     resolvedPrompter,
     reporter,
+    () => false,
   );
   const handler = new PermissionGateHandler(
     session,

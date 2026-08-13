@@ -18,6 +18,8 @@ export interface PermissionSystemExtensionConfig {
   yoloMode: boolean;
   /** Require a confirming second press of a decision hotkey in the inline TUI dialog. Defaults to true. */
   doublePressToConfirm: boolean;
+  /** Feature 4: dry-run / simulation mode — record would-be decisions, never enforce. */
+  dryRun?: boolean;
   /** Additional directories to auto-allow for reads as Pi infrastructure. */
   piInfrastructureReadPaths?: string[];
   /** How long a subagent waits for the parent's answer to a forwarded ask, in ms. Defaults to 600000. */

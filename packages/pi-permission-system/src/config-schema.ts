@@ -180,6 +180,11 @@ export const unifiedConfigSchema = z
         "Auto-approve `ask`-state permission checks, including subagent approval forwarding.\n\n⚠️ **Use with caution** — this disables all interactive confirmation prompts.",
       default: false,
     }),
+    dryRun: z.boolean().optional().meta({
+      description:
+        "Feature 4: dry-run / simulation mode. When true, every gate records the would-be policy decision (allow/ask/deny) as a `permission_request.dry_run` review entry and lets the tool proceed — no prompt, no block. For policy testing.",
+      default: false,
+    }),
     doublePressToConfirm: z.boolean().optional().meta({
       description:
         "Require a confirming second press of a decision hotkey in the inline permission dialog. Applies to TUI sessions only.",

@@ -32,6 +32,8 @@ export class GateRunner {
     private readonly recorder: SessionApprovalRecorder,
     private readonly prompter: AskEscalator,
     private readonly reporter: DecisionReporter,
+    /** Feature 4: dry-run mode — record the would-be decision, never enforce. */
+    private readonly getDryRun: () => boolean,
   ) {}
 
   /**
@@ -83,6 +85,18 @@ export class GateRunner {
         input: descriptor.input,
         agentName: agentName ?? undefined,
       });
+    }
+
+    // 1b. Feature 4: dry-run — record the would-be policy decision and allow
+    // through (no prompt, no block). Always allows; never enforces.
+    if (this.getDryRun()) {
+      this.reporter.writeReviewLog("permission_request.dry_run", {
+        ...descriptor.logContext,
+        agentName,
+        wouldBe: check.state,
+        tool: descriptor.surface,
+      });
+      return { action: "allow" };
     }
 
     // 2. Session-hit fast path
