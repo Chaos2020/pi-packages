@@ -11,9 +11,9 @@
  * Every failure path defers — more prompting, never less. Never emits `allow`.
  */
 
-import type { Authorizer, AuthorizerVerdict } from "../authority/authorizer";
-import type { PromptPermissionDetails } from "../authority/permission-prompter";
-import type { AuthorizerLog } from "../service";
+import type { Authorizer, AuthorizerVerdict } from "#src/authority/authorizer";
+import type { PromptPermissionDetails } from "#src/authority/permission-prompter";
+import type { AuthorizerLog } from "#src/service";
 import type { ModelJudgeConfig } from "./config-schema";
 import {
   type CompleteFn,

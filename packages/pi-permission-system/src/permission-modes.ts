@@ -64,7 +64,6 @@ export function applyMode(
       return isMutationTool(surface) ? "deny" : state;
     case "bypassPermissions":
       return "allow";
-    case "default":
     default:
       return state;
   }

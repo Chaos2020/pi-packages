@@ -12,7 +12,7 @@ const _require = createRequire(import.meta.url);
 function createDefaultAgenticLogger(): AgentLogger | null {
   try {
     const logDir =
-      process.env.AGENTIC_LOG_DIR ||
+      process.env.AGENTIC_LOG_DIR ??
       join(homedir(), "wrk", "mySkills", "logs", "agentic");
     const { AgentLogger } = _require("agentic-logger") as {
       AgentLogger: new (opts: {

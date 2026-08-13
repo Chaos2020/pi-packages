@@ -11,7 +11,7 @@
  * not a dependency of the fork); the `complete` seam keeps the same shape.
  */
 
-import type { AuthorizerVerdict } from "../authority/authorizer";
+import type { AuthorizerVerdict } from "#src/authority/authorizer";
 import type { ModelJudgeConfig } from "./config-schema";
 
 /** The reason used for a deny when the model omits its own. */
@@ -186,16 +186,16 @@ function readToolCallOutcome(
     // still defers (fail-safe).
     const text = extractText(reply);
     const verdictMatch =
-      text.match(/"verdict"\s*:\s*"(deny|defer)"/i) ??
-      text.match(/verdict[\s:]+(deny|defer)/i);
-    if (verdictMatch && verdictMatch[1]?.toLowerCase() === "deny") {
+      /"verdict"\s*:\s*"(deny|defer)"/i.exec(text) ??
+      /verdict[\s:]+(deny|defer)/i.exec(text);
+    if (verdictMatch?.[1]?.toLowerCase() === "deny") {
       const reasonMatch =
-        text.match(/"reason"\s*:\s*"([^"]+)"/i) ??
-        text.match(/reason[\s:]+["']?([^"';\n]{4,})/i);
+        /"reason"\s*:\s*"([^"]+)"/i.exec(text) ??
+        /reason[\s:]+["']?([^"';\n]{4,})/i.exec(text);
       return {
         verdict: {
           kind: "deny",
-          reason: reasonMatch?.[1]?.trim() || GENERIC_TEACHING_REASON,
+          reason: reasonMatch?.[1]?.trim() ?? GENERIC_TEACHING_REASON,
         },
         latencyMs,
         rawReply: text.slice(0, 500),

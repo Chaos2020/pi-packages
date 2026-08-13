@@ -31,7 +31,6 @@ export const BUILTIN_SECRET_PATTERNS: string[] = [
   // .env-style leaked line with an explicit secret key name (avoids false
   // positives on PATH=, HOME=, CC= etc.)
   "^(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|AUTH[_-]?TOKEN|BEARER)[ \t]*=[ \t]*[^ \t]{8,}",
-
 ];
 
 export function compileSecretPatterns(

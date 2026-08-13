@@ -1,20 +1,7 @@
+import { complete } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
-import { complete } from "@earendil-works/pi-ai";
 import { warmBashParser } from "./access-intent/bash/parser";
-import {
-  DEFAULT_TIMEOUT_MS,
-  type ModelJudgeConfig,
-} from "./model-judge/config-schema";
-import type { CompleteFn, ModelRegistryLike } from "./model-judge/model-review";
-import { createTypoReviewer } from "./model-judge/typo-reviewer";
-import {
-  BUILTIN_SECRET_PATTERNS,
-  compileSecretPatterns,
-  redactAll,
-  scanForSecrets,
-} from "./secret-scan/patterns";
-import { DenyStormMonitor } from "./deny-storm";
 import { buildResolvedIntentFromMatchValues } from "./access-intent/input-normalizer";
 import { AuthorizerRegistry } from "./authority/authorizer-registry";
 import { AuthorizerSelection } from "./authority/authorizer-selection";
@@ -36,6 +23,7 @@ import { getGlobalConfigPath } from "./config-paths";
 import { ConfigStore } from "./config-store";
 import { DecisionAudit } from "./decision-audit";
 import { GateDecisionReporter } from "./decision-reporter";
+import { DenyStormMonitor } from "./deny-storm";
 import { isYoloModeEnabled } from "./extension-config";
 import { computeExtensionPaths } from "./extension-paths";
 import {
@@ -47,11 +35,23 @@ import { GateRunner } from "./handlers/gates/runner";
 import { SkillInputGatePipeline } from "./handlers/gates/skill-input-gate-pipeline";
 import { ToolCallGatePipeline } from "./handlers/gates/tool-call-gate-pipeline";
 import { createFailClosedToolCall } from "./handlers/tool-call-boundary";
+import {
+  DEFAULT_TIMEOUT_MS,
+  type ModelJudgeConfig,
+} from "./model-judge/config-schema";
+import type { CompleteFn, ModelRegistryLike } from "./model-judge/model-review";
+import { createTypoReviewer } from "./model-judge/typo-reviewer";
 import { pathFlavorForPlatform } from "./path/path-flavor";
 import { PermissionManager } from "./permission-manager";
 import { PermissionResolver } from "./permission-resolver";
 import { PermissionSession } from "./permission-session";
 import { LocalPermissionsService } from "./permissions-service";
+import {
+  BUILTIN_SECRET_PATTERNS,
+  compileSecretPatterns,
+  redactAll,
+  scanForSecrets,
+} from "./secret-scan/patterns";
 import { PermissionServiceLifecycle } from "./service-lifecycle";
 import { PermissionSessionLogger } from "./session-logger";
 import { SessionRules } from "./session-rules";
@@ -360,9 +360,16 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
 
   // Feature 3: secret detection in tool output (tool_result can modify result).
   function toolResultText(content: readonly unknown[]): string {
-    return (content as { type?: string; text?: string }[])
-      .filter((p) => p.type === "text" && typeof p.text === "string")
-      .map((p) => p.text as string)
+    return content
+      .filter(
+        (p): p is { type: "text"; text: string } =>
+          typeof p === "object" &&
+          p !== null &&
+          "type" in p &&
+          (p as { type?: unknown }).type === "text" &&
+          typeof (p as { text?: unknown }).text === "string",
+      )
+      .map((p) => p.text)
       .join("\n");
   }
   pi.on("tool_result", (event, _ctx) => {
@@ -373,7 +380,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     if (sc.excludeTools?.includes(event.toolName)) {
       return undefined;
     }
-    const text = toolResultText(event.content ?? []);
+    const text = toolResultText(event.content);
     if (!text) {
       return undefined;
     }
@@ -385,7 +392,6 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     if (hits.length === 0) {
       return undefined;
     }
-    const redacted = redactAll(text, hits);
     logger.review("permission_request.secret_detected", {
       tool: event.toolName,
       count: hits.length,
@@ -401,17 +407,18 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       .join(", ")}\n`;
     // Preserve non-text parts (e.g. images) and the original isError; only the
     // text parts are redacted (feature 3), so the result stays structurally intact.
-    const parts = (event.content ?? []) as { type?: string; text?: string }[];
+    const parts = event.content as { type?: string; text?: string }[];
     let warned = false;
     const newContent = parts.map((part) => {
       if (part.type !== "text" || typeof part.text !== "string") {
         return part;
       }
       const redactedPart = redactAll(part.text, hits);
-      const text = warned
-        ? redactedPart
-        : ((warned = true), warning + redactedPart);
-      return { type: "text", text };
+      if (!warned) {
+        warned = true;
+        return { type: "text", text: warning + redactedPart };
+      }
+      return { type: "text", text: redactedPart };
     }) as typeof event.content;
     return { content: newContent, isError: event.isError };
   });
