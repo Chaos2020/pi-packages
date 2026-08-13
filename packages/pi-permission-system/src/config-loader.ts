@@ -212,6 +212,7 @@ export function mergeUnifiedConfigs(
     "permissionReviewLog",
     "yoloMode",
     "doublePressToConfirm",
+    "dryRun",
   ] as const) {
     const value = override[key] ?? base[key];
     if (value !== undefined) {
@@ -261,6 +262,29 @@ export function mergeUnifiedConfigs(
     merged.permission = basePerm;
   } else if (overridePerm) {
     merged.permission = overridePerm;
+  }
+
+  // Features 4-6: permissionMode (string enum) + the object sections
+  // (modelJudge, secretScan, denyStorm) — override replaces base wholesale.
+  if (override.permissionMode !== undefined) {
+    merged.permissionMode = override.permissionMode;
+  } else if (base.permissionMode !== undefined) {
+    merged.permissionMode = base.permissionMode;
+  }
+  if (override.modelJudge !== undefined) {
+    merged.modelJudge = override.modelJudge;
+  } else if (base.modelJudge !== undefined) {
+    merged.modelJudge = base.modelJudge;
+  }
+  if (override.secretScan !== undefined) {
+    merged.secretScan = override.secretScan;
+  } else if (base.secretScan !== undefined) {
+    merged.secretScan = base.secretScan;
+  }
+  if (override.denyStorm !== undefined) {
+    merged.denyStorm = override.denyStorm;
+  } else if (base.denyStorm !== undefined) {
+    merged.denyStorm = base.denyStorm;
   }
 
   return merged;

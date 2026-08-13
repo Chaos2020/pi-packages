@@ -9,7 +9,6 @@ import { z } from "zod";
 export const DEFAULT_TIMEOUT_MS = 5000;
 
 export const modelJudgeConfigSchema = z.object({
-  enabled: z.boolean().default(false),
   provider: z.string().min(1),
   model: z.string().min(1),
   instructions: z.string().min(1),
@@ -20,7 +19,6 @@ export const modelJudgeConfigSchema = z.object({
 export type ModelJudgeConfig = z.infer<typeof modelJudgeConfigSchema>;
 
 export const DEFAULT_MODEL_JUDGE_CONFIG: ModelJudgeConfig = {
-  enabled: false,
   provider: "",
   model: "",
   instructions: "",

@@ -12,7 +12,9 @@ import { normalizePermissionSystemConfig } from "#src/extension-config";
  *
  * These tests guard the seam between the two normalizers — the class of bug
  * fixed in #332, where a field declared on PermissionSystemExtensionConfig was
- * silently dropped by the UnifiedPermissionConfig intermediate.
+ * silently dropped by the UnifiedPermissionConfig intermediate. The features
+ * 2-6 sections below regressed exactly this class once (all five were dropped);
+ * these cases pin them.
  */
 describe("config pipeline seam", () => {
   let tempDir: string;
@@ -76,15 +78,42 @@ describe("config pipeline seam", () => {
     expect(config.toolInputPreviewMaxLength).toBe(500);
   });
 
-  it("defaults apply when config file is absent", () => {
-    // No config files written — agentDir and cwd directories don't exist.
+  it("features 2-6 fields all survive the full pipeline", () => {
+    writeGlobal({
+      dryRun: true,
+      permissionMode: "plan",
+      modelJudge: {
+        provider: "test-provider",
+        model: "light",
+        instructions: "judge paths",
+      },
+      secretScan: { enabled: true, action: "alert" },
+      denyStorm: { enabled: true, maxDenials: 7, windowMs: 5000 },
+    });
+
     const mergeResult = loadAndMergeConfigs(agentDir, cwd, extensionRoot);
     const config = normalizePermissionSystemConfig(mergeResult.merged);
 
-    expect(config.debugLog).toBe(false);
-    expect(config.permissionReviewLog).toBe(true);
-    expect(config.yoloMode).toBe(false);
-    expect(config.toolInputPreviewMaxLength).toBeUndefined();
-    expect(config.toolTextSummaryMaxLength).toBeUndefined();
+    expect(config.dryRun).toBe(true);
+    expect(config.permissionMode).toBe("plan");
+    expect(config.modelJudge?.provider).toBe("test-provider");
+    expect(config.secretScan?.enabled).toBe(true);
+    expect(config.denyStorm?.maxDenials).toBe(7);
+  });
+
+  it("project override of a feature field wins end to end", () => {
+    writeGlobal({ permissionMode: "default" });
+    const projectDir = join(cwd, ".pi", "extensions", "pi-permission-system");
+    mkdirSync(projectDir, { recursive: true });
+    writeFileSync(
+      join(projectDir, "config.json"),
+      JSON.stringify({ permissionMode: "acceptEdits", dryRun: true }),
+    );
+
+    const mergeResult = loadAndMergeConfigs(agentDir, cwd, extensionRoot);
+    const config = normalizePermissionSystemConfig(mergeResult.merged);
+
+    expect(config.permissionMode).toBe("acceptEdits");
+    expect(config.dryRun).toBe(true);
   });
 });

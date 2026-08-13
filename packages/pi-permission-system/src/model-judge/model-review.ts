@@ -19,6 +19,10 @@ export const GENERIC_TEACHING_REASON =
   "This looks like a mistyped path. Verify the correct location before retrying.";
 
 // ---- narrow structural projections of @earendil-works/pi-ai types ---------
+// Intentionally narrower than the real types: fields the reviewer does not
+// read (ToolCall.id/name, ThinkingContent parts, optional systemPrompt) are
+// omitted. The `complete` seam accepts these; do not extend the projections to
+// match pi-ai without re-checking the runtime shapes.
 export interface Model {
   id: string;
   providerId?: string;
@@ -176,11 +180,32 @@ function readToolCallOutcome(
     (part): part is ToolCall => part.type === "toolCall",
   );
   if (!call) {
+    // Fallback for providers whose endpoint ignores `toolChoice` (e.g. the
+    // openai-completions/google endpoints return free text): parse a verdict
+    // from the text so the judge is not a silent no-op. Anything unparseable
+    // still defers (fail-safe).
+    const text = extractText(reply);
+    const verdictMatch =
+      text.match(/"verdict"\s*:\s*"(deny|defer)"/i) ??
+      text.match(/verdict[\s:]+(deny|defer)/i);
+    if (verdictMatch && verdictMatch[1]?.toLowerCase() === "deny") {
+      const reasonMatch =
+        text.match(/"reason"\s*:\s*"([^"]+)"/i) ??
+        text.match(/reason[\s:]+["']?([^"';\n]{4,})/i);
+      return {
+        verdict: {
+          kind: "deny",
+          reason: reasonMatch?.[1]?.trim() || GENERIC_TEACHING_REASON,
+        },
+        latencyMs,
+        rawReply: text.slice(0, 500),
+      };
+    }
     return {
       verdict: { kind: "defer" },
       deferReason: "no-tool-call",
       latencyMs,
-      rawReply: extractText(reply),
+      rawReply: text,
     };
   }
   const args = call.arguments;

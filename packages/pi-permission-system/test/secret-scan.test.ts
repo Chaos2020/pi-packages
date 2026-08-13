@@ -33,8 +33,9 @@ describe("feature 3: secret detection", () => {
     const hits = scanForSecrets(`prefix ${secret} suffix`, compiled);
     expect(hits.length).toBe(1);
     const redacted = redactSecret(hits[0].match);
-    expect(redacted).toContain("****");
+    expect(redacted).toBe("[REDACTED]");
     expect(redacted).not.toContain(secret);
+    expect(redacted).not.toContain(secret.slice(0, 4)); // no prefix leak
   });
 
   test("redactAll replaces every occurrence", () => {
@@ -44,7 +45,7 @@ describe("feature 3: secret detection", () => {
     expect(hits.length).toBe(1);
     const out = redactAll(text, hits);
     expect(out).not.toContain("sk-abc1234567890abcdef");
-    expect(out).toContain("****");
+    expect(out).toContain("[REDACTED]");
   });
 
   test("empty pattern list -> no hits (and no throw)", () => {

@@ -11,7 +11,6 @@ import type { PromptPermissionDetails } from "#src/authority/permission-prompter
 
 function makeConfig(overrides: Partial<ModelJudgeConfig> = {}): ModelJudgeConfig {
   return {
-    enabled: true,
     provider: "test-provider",
     model: "light",
     instructions: "You judge paths.",
@@ -130,6 +129,40 @@ describe("feature 2: model-judge authorizer", () => {
       complete: async () => {
         throw new Error("model down");
       },
+    });
+    const verdict = await reviewer(
+      makeDetails("/pi-permission-system/packages/pi-permission-system/x.ts"),
+      {} as never,
+      makeLog() as never,
+    );
+    expect(verdict.kind).toBe("defer");
+  });
+
+  test("fail-safe: model-unresolved (find returns undefined) -> defer", async () => {
+    const reviewer = createTypoReviewer({
+      getConfig: () => makeConfig(),
+      getRegistry: () => ({
+        find: () => undefined,
+        getApiKeyAndHeaders: async () => ({ ok: true }),
+      }),
+      complete: completeWith("deny"),
+    });
+    const verdict = await reviewer(
+      makeDetails("/pi-permission-system/packages/pi-permission-system/x.ts"),
+      {} as never,
+      makeLog() as never,
+    );
+    expect(verdict.kind).toBe("defer");
+  });
+
+  test("fail-safe: auth-failed (getApiKeyAndHeaders !ok) -> defer", async () => {
+    const reviewer = createTypoReviewer({
+      getConfig: () => makeConfig(),
+      getRegistry: () => ({
+        find: () => ({ id: "light" }),
+        getApiKeyAndHeaders: async () => ({ ok: false, error: "no key" }),
+      }),
+      complete: completeWith("deny"),
     });
     const verdict = await reviewer(
       makeDetails("/pi-permission-system/packages/pi-permission-system/x.ts"),

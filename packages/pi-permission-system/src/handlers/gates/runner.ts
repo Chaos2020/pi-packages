@@ -104,18 +104,6 @@ export class GateRunner {
       }
     }
 
-    // 1b. Feature 4: dry-run — record the would-be policy decision and allow
-    // through (no prompt, no block). Always allows; never enforces.
-    if (this.getDryRun()) {
-      this.reporter.writeReviewLog("permission_request.dry_run", {
-        ...descriptor.logContext,
-        agentName,
-        wouldBe: check.state,
-        tool: descriptor.surface,
-      });
-      return { action: "allow" };
-    }
-
     // 2. Session-hit fast path
     if (check.source === "session") {
       this.reporter.writeReviewLog("permission_request.session_approved", {
@@ -155,6 +143,19 @@ export class GateRunner {
           deriveResolution(check.state, "allow", false, false, true),
         ),
       );
+      return { action: "allow" };
+    }
+
+    // 2c. Feature 4: dry-run — record the would-be policy decision (after the
+    // session/yolo fast paths, so a fast-path allow is never misreported) and
+    // allow through (no prompt, no block). Always allows; never enforces.
+    if (this.getDryRun()) {
+      this.reporter.writeReviewLog("permission_request.dry_run", {
+        ...descriptor.logContext,
+        agentName,
+        wouldBe: check.state,
+        tool: descriptor.surface,
+      });
       return { action: "allow" };
     }
 

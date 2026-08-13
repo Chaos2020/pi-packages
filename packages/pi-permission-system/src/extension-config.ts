@@ -35,12 +35,12 @@ export interface PermissionSystemExtensionConfig {
   /**
    * Model mechanism for the built-in 'model-judge' authorizer (feature 2): the
    * provider/model/instructions driving the deny-first typo-path reviewer. The
-   * link is inert unless also named in `authorizerChain`.
+   * link is inert unless the mechanism is complete AND named in `authorizerChain`.
    */
   modelJudge?: {
-    provider: string;
-    model: string;
-    instructions: string;
+    provider?: string;
+    model?: string;
+    instructions?: string;
     typoPatterns?: string[];
     timeoutMs?: number;
   };
@@ -120,6 +120,22 @@ export function normalizePermissionSystemConfig(
   }
   if (raw.authorizerChain !== undefined) {
     result.authorizerChain = raw.authorizerChain;
+  }
+  // Features 2-6 fields — must survive normalization or the features are dead.
+  if (raw.dryRun !== undefined) {
+    result.dryRun = raw.dryRun;
+  }
+  if (raw.permissionMode !== undefined) {
+    result.permissionMode = raw.permissionMode;
+  }
+  if (raw.modelJudge !== undefined) {
+    result.modelJudge = raw.modelJudge;
+  }
+  if (raw.secretScan !== undefined) {
+    result.secretScan = raw.secretScan;
+  }
+  if (raw.denyStorm !== undefined) {
+    result.denyStorm = raw.denyStorm;
   }
   return result;
 }

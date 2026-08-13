@@ -39,7 +39,7 @@ import {
   OWNER_ONLY_FILE_MODE,
   restrictExistingPathToOwner,
 } from "./log-file-permissions";
-import { redactedJsonStringify } from "./log-redaction";
+import { isSensitiveLogKey, redactedJsonStringify } from "./log-redaction";
 
 export interface PermissionSystemLogger {
   debug: (
@@ -109,7 +109,12 @@ export function createPermissionSystemLogger(
             details.isError === true ||
             details.error !== undefined;
           const isWarn = !isError && /warn/i.test(event);
-          const ctx: Record<string, unknown> = { stream, event, ...details };
+          const ctx: Record<string, unknown> = { stream, event };
+          // Mirror the file sink's key-name redaction so a sensitive value
+          // (apiKey/token/secret/password...) never lands raw in AgenticLogger.
+          for (const [k, v] of Object.entries(details)) {
+            ctx[k] = isSensitiveLogKey(k) ? "[redacted]" : v;
+          }
           const msg = `${stream}:${event}`;
           if (isError) lg.error(msg, { module: "permission-system", ctx });
           else if (isWarn) lg.warn(msg, { module: "permission-system", ctx });

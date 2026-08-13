@@ -306,9 +306,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     if (modelJudgeRegistered) return;
     const mj = configStore.current().modelJudge;
     if (!mj?.provider || !mj.model || !mj.instructions) return;
-    modelJudgeRegistered = true;
     const mjConfig: ModelJudgeConfig = {
-      enabled: true,
       provider: mj.provider,
       model: mj.model,
       instructions: mj.instructions,
@@ -317,14 +315,26 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     };
     const registry = (ctx as { modelRegistry?: ModelRegistryLike })
       .modelRegistry;
-    authorizerRegistry.register(
-      "model-judge",
-      createTypoReviewer({
-        getConfig: () => mjConfig,
-        getRegistry: () => registry,
-        complete: complete as unknown as CompleteFn,
-      }),
-    );
+    try {
+      authorizerRegistry.register(
+        "model-judge",
+        createTypoReviewer({
+          getConfig: () => mjConfig,
+          getRegistry: () => registry,
+          // Double cast: CompleteFn is a structural projection of pi-ai's
+          // `complete`; the cast is checked against the projection only, so a
+          // pi-ai signature drift surfaces at runtime (acceptable for the seam).
+          complete: complete as unknown as CompleteFn,
+        }),
+      );
+      // Set the guard only after a successful register — a throw leaves it
+      // unset so a later session_start can retry, and never breaks startup.
+      modelJudgeRegistered = true;
+    } catch (error) {
+      logger.review("permission_request.model_judge_register_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   pi.on("session_start", (event, ctx) => {
@@ -389,6 +399,20 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     const warning = `[pi-permission-system] Secret detected in tool output and redacted (${hits.length}): ${hits
       .map((h) => h.pattern)
       .join(", ")}\n`;
-    return { content: [{ type: "text", text: warning + redacted }] };
+    // Preserve non-text parts (e.g. images) and the original isError; only the
+    // text parts are redacted (feature 3), so the result stays structurally intact.
+    const parts = (event.content ?? []) as { type?: string; text?: string }[];
+    let warned = false;
+    const newContent = parts.map((part) => {
+      if (part.type !== "text" || typeof part.text !== "string") {
+        return part;
+      }
+      const redactedPart = redactAll(part.text, hits);
+      const text = warned
+        ? redactedPart
+        : ((warned = true), warning + redactedPart);
+      return { type: "text", text };
+    }) as typeof event.content;
+    return { content: newContent, isError: event.isError };
   });
 }

@@ -16,8 +16,30 @@ export type PermissionMode =
   | "plan"
   | "bypassPermissions";
 
-/** Tool surfaces treated as mutations for mode purposes. */
-const MUTATION_TOOLS = new Set(["edit", "write", "bash"]);
+/**
+ * Tool surfaces treated as mutations for mode purposes. Includes the common
+ * write/edit/execution tools; shellTools aliases (non-bash tools with shell
+ * semantics) are NOT covered here — callers with such aliases should extend
+ * via their own mode policy or the shellTools config.
+ */
+const MUTATION_TOOLS = new Set([
+  "edit",
+  "write",
+  "bash",
+  "delete",
+  "create",
+  "rename",
+  "apply_patch",
+  "patch",
+  "mkdir",
+  "mv",
+  "cp",
+  "rm",
+  "chmod",
+  "chown",
+  "install",
+  "unlink",
+]);
 
 export function isMutationTool(surface: string): boolean {
   return MUTATION_TOOLS.has(surface);

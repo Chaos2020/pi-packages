@@ -28,8 +28,10 @@ export const BUILTIN_SECRET_PATTERNS: string[] = [
   "sk_live_[0-9a-zA-Z]{20,}",
   // generic key=value assignment with a long secret value
   "(?:api[_-]?key|token|secret|passwd|password)[ \t]*[:=][ \t]*[A-Za-z0-9_+/=]{12,}",
-  // .env-style leaked line: UPPER_KEY = value
-  "^[A-Z][A-Z0-9_]{2,}[ \t]*=[ \t]*[^ \t]{8,}",
+  // .env-style leaked line with an explicit secret key name (avoids false
+  // positives on PATH=, HOME=, CC= etc.)
+  "^(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE[_-]?KEY|ACCESS[_-]?KEY|AUTH[_-]?TOKEN|BEARER)[ \t]*=[ \t]*[^ \t]{8,}",
+
 ];
 
 export function compileSecretPatterns(
@@ -56,11 +58,9 @@ export interface SecretHit {
   redacted: string;
 }
 
-export function redactSecret(match: string): string {
-  if (match.length <= 4) {
-    return "****";
-  }
-  return `${match.slice(0, 4)}****`;
+export function redactSecret(_match: string): string {
+  // Placeholder only — never leak any prefix of the secret.
+  return "[REDACTED]";
 }
 
 export function scanForSecrets(
@@ -86,7 +86,10 @@ export function scanForSecrets(
 
 export function redactAll(text: string, hits: SecretHit[]): string {
   let out = text;
-  for (const hit of hits) {
+  // Longest match first, so a shorter hit's placeholder can never break a
+  // longer hit's full match (order-safety).
+  const ordered = [...hits].sort((a, b) => b.match.length - a.match.length);
+  for (const hit of ordered) {
     out = out.split(hit.match).join(hit.redacted);
   }
   return out;
