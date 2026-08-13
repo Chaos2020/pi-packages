@@ -91,6 +91,7 @@
   "dependencies": {
     "tree-sitter-bash": "^0.25.1",
     "web-tree-sitter": "^0.26.9",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "agentic-logger": "file:/mnt/big10T/wrk/AgenticLogger/sdks/ts"
   }
 }

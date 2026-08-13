@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "prepare": "command -v prek >/dev/null 2>&1 && prek install || echo 'prek not found \u2014 skipping hook install (see README)'",
+    "prepare": "command -v prek >/dev/null 2>&1 && prek install || echo 'prek not found — skipping hook install (see README)'",
     "check": "pnpm -r run check",
     "test": "pnpm -r run test",
     "lint": "biome check . && eslint packages/ && rumdl check .",
@@ -27,5 +27,23 @@
     "globals": "catalog:",
     "rumdl": "^0.2.10",
     "typescript-eslint": "catalog:"
+  },
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ],
+    "catalog": {
+      "@biomejs/biome": "^2.4.16",
+      "eslint": "^10.4.1",
+      "globals": "^17.5.0",
+      "typescript-eslint": "^8.61.0",
+      "rumdl": "^0.2.10",
+      "typescript": "^6.0.3",
+      "vitest": "^4.1.8",
+      "@types/node": "^22.15.3",
+      "fallow": "^3.2.0",
+      "rollup": "^4.62.2",
+      "rollup-plugin-dts": "^6.4.1"
+    }
   }
 }
