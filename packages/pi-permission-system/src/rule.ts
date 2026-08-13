@@ -24,7 +24,8 @@ export type RuleOrigin =
   | "baseline"
   | "session"
   | "yolo"
-  | "fail-closed";
+  | "fail-closed"
+  | "mode";
 
 /** A single permission rule — the atomic unit of policy. */
 export interface Rule {

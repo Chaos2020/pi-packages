@@ -61,6 +61,8 @@ export interface PermissionSystemExtensionConfig {
     maxDenials?: number;
     windowMs?: number;
   };
+  /** Feature 6: session permission mode (default/acceptEdits/plan/bypassPermissions). */
+  permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
 }
 
 export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {

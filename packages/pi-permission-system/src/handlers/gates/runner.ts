@@ -7,6 +7,7 @@ import {
   formatUserDeniedReason,
 } from "#src/denial-messages";
 import { applyPermissionGate } from "#src/permission-gate";
+import { applyMode, type PermissionMode } from "#src/permission-modes";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import type { SessionApprovalRecorder } from "#src/session-approval-recorder";
 import type { PermissionCheckResult } from "#src/types";
@@ -36,6 +37,8 @@ export class GateRunner {
     private readonly getDryRun: () => boolean,
     /** Feature 5: deny-storm — called on each enforced deny (block). */
     private readonly recordDenial: () => void,
+    /** Feature 6: session permission mode (default/acceptEdits/plan/bypass). */
+    private readonly getMode: () => PermissionMode | undefined,
   ) {}
 
   /**
@@ -87,6 +90,18 @@ export class GateRunner {
         input: descriptor.input,
         agentName: agentName ?? undefined,
       });
+    }
+
+    // 1a. Feature 6: apply session permission mode — only resolves `ask`;
+    // a configured deny/allow is never overridden by a mode.
+    if (check.state === "ask") {
+      const mode = this.getMode();
+      if (mode && mode !== "default") {
+        const resolved = applyMode(check.state, descriptor.surface, mode);
+        if (resolved !== check.state) {
+          check = { ...check, state: resolved, origin: "mode" };
+        }
+      }
     }
 
     // 1b. Feature 4: dry-run — record the would-be policy decision and allow

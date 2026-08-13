@@ -7,6 +7,7 @@ import type { ShellToolsConfig } from "#src/config-schema";
 import type { DecisionReporter } from "#src/decision-reporter";
 import type { DenialContext } from "#src/denial-messages";
 import type { GateDescriptor } from "#src/handlers/gates/descriptor";
+import type { PermissionMode } from "#src/permission-modes";
 import { GateRunner } from "#src/handlers/gates/runner";
 import type { SkillInputGateInputs } from "#src/handlers/gates/skill-input-gate-pipeline";
 import type { ToolCallGateInputs } from "#src/handlers/gates/tool-call-gate-pipeline";
@@ -99,6 +100,7 @@ export function makeGateRunner(
     escalate?: AskEscalator["escalate"];
     reporter?: Partial<DecisionReporter>;
     dryRun?: boolean;
+    mode?: PermissionMode;
   } = {},
 ) {
   const reporter = makeReporter(overrides.reporter);
@@ -124,6 +126,7 @@ export function makeGateRunner(
     reporter,
     () => (overrides as { dryRun?: boolean }).dryRun ?? false,
     () => {},
+    () => (overrides as { mode?: PermissionMode }).mode,
   );
   return {
     runner,

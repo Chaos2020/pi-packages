@@ -282,6 +282,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     reporter,
     () => configStore.current().dryRun ?? false,
     () => denyStorm.recordDenial(),
+    () => configStore.current().permissionMode,
   );
   const toolCallGatePipeline = new ToolCallGatePipeline(
     resolver,

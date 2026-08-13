@@ -25,6 +25,12 @@
       "default": false,
       "type": "boolean"
     },
+    "permissionMode": {
+      "description": "Feature 6: session permission mode — a coarse layer over per-rule allow/ask/deny. default: unchanged; acceptEdits: auto-allow file-mutation asks; plan: auto-deny file-mutation asks; bypassPermissions: auto-allow every ask. A configured deny is never overridden by any mode.",
+      "default": "default",
+      "type": "string",
+      "enum": ["default", "acceptEdits", "plan", "bypassPermissions"]
+    },
     "dryRun": {
       "description": "Feature 4: dry-run / simulation mode. When true, every gate records the would-be policy decision (allow/ask/deny) as a `permission_request.dry_run` review entry and lets the tool proceed — no prompt, no block. For policy testing.",
       "default": false,
