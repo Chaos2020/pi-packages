@@ -42,6 +42,17 @@ export interface PermissionSystemExtensionConfig {
     typoPatterns?: string[];
     timeoutMs?: number;
   };
+  /**
+   * Feature 3: secret detection in tool output. When enabled, tool results are
+   * scanned for leaked secrets; `deny` redacts them in the result, `alert` only
+   * logs. `patterns` extends the built-ins; `excludeTools` skips tools.
+   */
+  secretScan?: {
+    enabled?: boolean;
+    action?: "deny" | "alert";
+    patterns?: string[];
+    excludeTools?: string[];
+  };
 }
 
 export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {

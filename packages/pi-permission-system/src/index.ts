@@ -8,6 +8,12 @@ import {
 } from "./model-judge/config-schema";
 import type { CompleteFn, ModelRegistryLike } from "./model-judge/model-review";
 import { createTypoReviewer } from "./model-judge/typo-reviewer";
+import {
+  BUILTIN_SECRET_PATTERNS,
+  compileSecretPatterns,
+  redactAll,
+  scanForSecrets,
+} from "./secret-scan/patterns";
 import { buildResolvedIntentFromMatchValues } from "./access-intent/input-normalizer";
 import { AuthorizerRegistry } from "./authority/authorizer-registry";
 import { AuthorizerSelection } from "./authority/authorizer-selection";
@@ -326,4 +332,48 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       logger,
     ),
   );
+
+  // Feature 3: secret detection in tool output (tool_result can modify result).
+  function toolResultText(content: readonly unknown[]): string {
+    return (content as { type?: string; text?: string }[])
+      .filter((p) => p.type === "text" && typeof p.text === "string")
+      .map((p) => p.text as string)
+      .join("\n");
+  }
+  pi.on("tool_result", (event, _ctx) => {
+    const sc = configStore.current().secretScan;
+    if (!sc?.enabled) {
+      return undefined;
+    }
+    if (sc.excludeTools?.includes(event.toolName)) {
+      return undefined;
+    }
+    const text = toolResultText(event.content ?? []);
+    if (!text) {
+      return undefined;
+    }
+    const compiled = compileSecretPatterns([
+      ...BUILTIN_SECRET_PATTERNS,
+      ...(sc.patterns ?? []),
+    ]);
+    const hits = scanForSecrets(text, compiled);
+    if (hits.length === 0) {
+      return undefined;
+    }
+    const redacted = redactAll(text, hits);
+    logger.review("permission_request.secret_detected", {
+      tool: event.toolName,
+      count: hits.length,
+      patterns: hits.map((h) => h.pattern),
+      action: sc.action ?? "deny",
+      isError: event.isError,
+    });
+    if (sc.action === "alert") {
+      return undefined;
+    }
+    const warning = `[pi-permission-system] Secret detected in tool output and redacted (${hits.length}): ${hits
+      .map((h) => h.pattern)
+      .join(", ")}\n`;
+    return { content: [{ type: "text", text: warning + redacted }] };
+  });
 }

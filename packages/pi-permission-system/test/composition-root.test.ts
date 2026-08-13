@@ -58,6 +58,7 @@ const EXPECTED_HANDLERS = [
   "session_shutdown",
   "session_start",
   "tool_call",
+  "tool_result",
 ];
 
 let agentDir: string;

@@ -236,6 +236,19 @@ export const unifiedConfigSchema = z
           "Model mechanism for the built-in 'model-judge' authorizer (feature 2): provider/model/instructions driving the deny-first typo-path reviewer. The link is inert unless named in `authorizerChain` (opt-in activation).",
         default: undefined,
       }),
+    secretScan: z
+      .object({
+        enabled: z.boolean().optional(),
+        action: z.enum(["deny", "alert"]).optional(),
+        patterns: z.array(z.string().min(1)).optional(),
+        excludeTools: z.array(z.string().min(1)).optional(),
+      })
+      .optional()
+      .meta({
+        description:
+          "Feature 3: secret detection in tool output. When enabled, tool results are scanned for leaked secrets; `deny` redacts the secret in the result (with a warning), `alert` only logs. `patterns` extends the built-in secret regexes; `excludeTools` skips tools (e.g. grep/read) to avoid false positives.",
+        default: undefined,
+      }),
   })
   .meta({
     title: "PI Permission System Configuration",

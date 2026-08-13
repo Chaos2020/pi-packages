@@ -192,6 +192,34 @@
         }
       },
       "additionalProperties": false
+    },
+    "secretScan": {
+      "description": "Feature 3: secret detection in tool output. When enabled, tool results are scanned for leaked secrets; `deny` redacts the secret in the result (with a warning), `alert` only logs. `patterns` extends the built-in secret regexes; `excludeTools` skips tools (e.g. grep/read) to avoid false positives.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string",
+          "enum": ["deny", "alert"]
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "excludeTools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false,
