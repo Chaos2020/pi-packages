@@ -34,6 +34,8 @@ export class GateRunner {
     private readonly reporter: DecisionReporter,
     /** Feature 4: dry-run mode — record the would-be decision, never enforce. */
     private readonly getDryRun: () => boolean,
+    /** Feature 5: deny-storm — called on each enforced deny (block). */
+    private readonly recordDenial: () => void,
   ) {}
 
   /**
@@ -207,6 +209,7 @@ export class GateRunner {
     }
 
     if (gateResult.action === "block") {
+      this.recordDenial();
       return { action: "block", reason: gateResult.reason };
     }
 

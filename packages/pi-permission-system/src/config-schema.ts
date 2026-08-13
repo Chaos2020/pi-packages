@@ -241,6 +241,18 @@ export const unifiedConfigSchema = z
           "Model mechanism for the built-in 'model-judge' authorizer (feature 2): provider/model/instructions driving the deny-first typo-path reviewer. The link is inert unless named in `authorizerChain` (opt-in activation).",
         default: undefined,
       }),
+    denyStorm: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxDenials: z.number().int().positive().optional(),
+        windowMs: z.number().int().positive().optional(),
+      })
+      .optional()
+      .meta({
+        description:
+          "Feature 5: deny-storm alerting. When more than `maxDenials` denials occur within `windowMs`, emit a `permission_request.deny_storm` alert (review log + AgenticLogger ERROR + notify).",
+        default: undefined,
+      }),
     secretScan: z
       .object({
         enabled: z.boolean().optional(),

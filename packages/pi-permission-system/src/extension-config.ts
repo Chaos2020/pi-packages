@@ -55,6 +55,12 @@ export interface PermissionSystemExtensionConfig {
     patterns?: string[];
     excludeTools?: string[];
   };
+  /** Feature 5: deny-storm alerting — burst of denials within a window. */
+  denyStorm?: {
+    enabled?: boolean;
+    maxDenials?: number;
+    windowMs?: number;
+  };
 }
 
 export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {

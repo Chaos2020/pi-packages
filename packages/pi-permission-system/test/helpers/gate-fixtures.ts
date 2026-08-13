@@ -123,6 +123,7 @@ export function makeGateRunner(
     { escalate },
     reporter,
     () => (overrides as { dryRun?: boolean }).dryRun ?? false,
+    () => {},
   );
   return {
     runner,

@@ -14,6 +14,7 @@ import {
   redactAll,
   scanForSecrets,
 } from "./secret-scan/patterns";
+import { DenyStormMonitor } from "./deny-storm";
 import { buildResolvedIntentFromMatchValues } from "./access-intent/input-normalizer";
 import { AuthorizerRegistry } from "./authority/authorizer-registry";
 import { AuthorizerSelection } from "./authority/authorizer-selection";
@@ -263,12 +264,24 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   );
 
   const reporter = new GateDecisionReporter(logger, pi.events);
+  const denyStorm = new DenyStormMonitor({
+    enabled: () => configStore.current().denyStorm?.enabled ?? false,
+    maxDenials: () => configStore.current().denyStorm?.maxDenials ?? 5,
+    windowMs: () => configStore.current().denyStorm?.windowMs ?? 60000,
+    onAlert: (count) => {
+      reporter.writeReviewLog("permission_request.deny_storm", { count });
+      session.notify(
+        `[pi-permission-system] Deny storm: ${count} denials within the window.`,
+      );
+    },
+  });
   const gateRunner = new GateRunner(
     resolver,
     sessionRules,
     authorizerSelection,
     reporter,
     () => configStore.current().dryRun ?? false,
+    () => denyStorm.recordDenial(),
   );
   const toolCallGatePipeline = new ToolCallGatePipeline(
     resolver,
