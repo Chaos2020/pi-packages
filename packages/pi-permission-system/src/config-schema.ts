@@ -222,6 +222,20 @@ export const unifiedConfigSchema = z
     }),
     permission: permissionSchema.optional(),
     shellTools: shellToolsSchema.optional(),
+    modelJudge: z
+      .object({
+        provider: z.string().min(1).optional(),
+        model: z.string().min(1).optional(),
+        instructions: z.string().min(1).optional(),
+        typoPatterns: z.array(z.string().min(1)).optional(),
+        timeoutMs: z.number().int().positive().optional(),
+      })
+      .optional()
+      .meta({
+        description:
+          "Model mechanism for the built-in 'model-judge' authorizer (feature 2): provider/model/instructions driving the deny-first typo-path reviewer. The link is inert unless named in `authorizerChain` (opt-in activation).",
+        default: undefined,
+      }),
   })
   .meta({
     title: "PI Permission System Configuration",

@@ -1,6 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
+import { complete } from "@earendil-works/pi-ai";
 import { warmBashParser } from "./access-intent/bash/parser";
+import {
+  DEFAULT_TIMEOUT_MS,
+  type ModelJudgeConfig,
+} from "./model-judge/config-schema";
+import type { CompleteFn, ModelRegistryLike } from "./model-judge/model-review";
+import { createTypoReviewer } from "./model-judge/typo-reviewer";
 import { buildResolvedIntentFromMatchValues } from "./access-intent/input-normalizer";
 import { AuthorizerRegistry } from "./authority/authorizer-registry";
 import { AuthorizerSelection } from "./authority/authorizer-selection";
@@ -271,9 +278,39 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     gateRunner,
   );
 
-  pi.on("session_start", (event, ctx) =>
-    lifecycle.handleSessionStart(event, ctx),
-  );
+  // Feature 2: register the built-in 'model-judge' authorizer when the config
+  // provides a complete model mechanism. Inert unless named in authorizerChain.
+  let modelJudgeRegistered = false;
+  function registerModelJudge(ctx: unknown): void {
+    if (modelJudgeRegistered) return;
+    const mj = configStore.current().modelJudge;
+    if (!mj?.provider || !mj.model || !mj.instructions) return;
+    modelJudgeRegistered = true;
+    const mjConfig: ModelJudgeConfig = {
+      enabled: true,
+      provider: mj.provider,
+      model: mj.model,
+      instructions: mj.instructions,
+      typoPatterns: mj.typoPatterns ?? [],
+      timeoutMs: mj.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    };
+    const registry = (ctx as { modelRegistry?: ModelRegistryLike })
+      .modelRegistry;
+    authorizerRegistry.register(
+      "model-judge",
+      createTypoReviewer({
+        getConfig: () => mjConfig,
+        getRegistry: () => registry,
+        complete: complete as unknown as CompleteFn,
+      }),
+    );
+  }
+
+  pi.on("session_start", (event, ctx) => {
+    const result = lifecycle.handleSessionStart(event, ctx);
+    registerModelJudge(ctx);
+    return result;
+  });
   pi.on("resources_discover", (event, ctx) =>
     lifecycle.handleResourcesDiscover(event, ctx),
   );

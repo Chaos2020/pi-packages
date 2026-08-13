@@ -30,6 +30,18 @@ export interface PermissionSystemExtensionConfig {
   shellTools?: ShellToolsConfig;
   /** Ordered names of registered live-authority chain links to consult before the terminal authorizer. */
   authorizerChain?: string[];
+  /**
+   * Model mechanism for the built-in 'model-judge' authorizer (feature 2): the
+   * provider/model/instructions driving the deny-first typo-path reviewer. The
+   * link is inert unless also named in `authorizerChain`.
+   */
+  modelJudge?: {
+    provider: string;
+    model: string;
+    instructions: string;
+    typoPatterns?: string[];
+    timeoutMs?: number;
+  };
 }
 
 export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {
