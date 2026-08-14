@@ -400,6 +400,7 @@ pi.events.on("permissions:decision", (raw) => {
 | `user_denied`                 | User denied via dialog                                               |
 | `auto_approved`               | Yolo mode — approved automatically without dialog                    |
 | `confirmation_unavailable`    | State was `ask` but no UI was available — blocked                    |
+| `ask_timeout`                 | State was `ask` and no answer arrived within `askTimeoutMs` — auto-denied |
 
 ---
 

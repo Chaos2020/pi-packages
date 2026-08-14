@@ -28,6 +28,16 @@ export interface PermissionSystemExtensionConfig {
   toolInputPreviewMaxLength?: number;
   /** Max length of inline pattern/path summaries (grep/find/ls) in permission prompts. Defaults to 80. */
   toolTextSummaryMaxLength?: number;
+  /**
+   * Wrapper commands explicitly trusted to bypass the indirection-wrapper
+   * deny floor. Only add entries you have deliberately vetted. Defaults to [].
+   */
+  wrapperAllowlist?: string[];
+  /**
+   * Auto-deny an unanswered permission ask after this many milliseconds.
+   * 0 disables the timeout. Defaults to DEFAULT_ASK_TIMEOUT_MS (3000).
+   */
+  askTimeoutMs?: number;
   /** Non-bash tools that carry shell semantics, keyed by tool name. */
   shellTools?: ShellToolsConfig;
   /** Ordered names of registered live-authority chain links to consult before the terminal authorizer. */
@@ -42,6 +52,21 @@ export interface PermissionSystemExtensionConfig {
     model?: string;
     instructions?: string;
     typoPatterns?: string[];
+    timeoutMs?: number;
+  };
+  /**
+   * Model mechanism for the 'command-safety-judge' authorizer: an allow-capable
+   * LLM judge ruling on any `ask` (deny/suggest/allow/defer) at the model's top
+   * reasoning level. Defaults to glm-5.2 (fallback deepseek-v4-pro), reasoning
+   * 'max'. Inert unless named in `authorizerChain`.
+   */
+  commandSafetyJudge?: {
+    provider?: string;
+    model?: string;
+    fallbackProvider?: string;
+    fallbackModel?: string;
+    reasoning?: "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+    instructions?: string;
     timeoutMs?: number;
   };
   /**
@@ -65,11 +90,16 @@ export interface PermissionSystemExtensionConfig {
   permissionMode?: "default" | "acceptEdits" | "plan" | "bypassPermissions";
 }
 
+/** Default for `askTimeoutMs`: auto-deny an unanswered ask after 3 seconds. */
+export const DEFAULT_ASK_TIMEOUT_MS = 3000;
+
 export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {
   debugLog: false,
   permissionReviewLog: true,
   yoloMode: false,
   doublePressToConfirm: true,
+  wrapperAllowlist: [],
+  askTimeoutMs: DEFAULT_ASK_TIMEOUT_MS,
 };
 
 function resolveExtensionRoot(moduleUrl = import.meta.url): string {
@@ -102,6 +132,8 @@ export function normalizePermissionSystemConfig(
     permissionReviewLog: raw.permissionReviewLog !== false,
     yoloMode: raw.yoloMode === true,
     doublePressToConfirm: raw.doublePressToConfirm !== false,
+    wrapperAllowlist: raw.wrapperAllowlist ?? [],
+    askTimeoutMs: raw.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
   };
   if (raw.piInfrastructureReadPaths !== undefined) {
     result.piInfrastructureReadPaths = raw.piInfrastructureReadPaths;
@@ -130,6 +162,9 @@ export function normalizePermissionSystemConfig(
   }
   if (raw.modelJudge !== undefined) {
     result.modelJudge = raw.modelJudge;
+  }
+  if (raw.commandSafetyJudge !== undefined) {
+    result.commandSafetyJudge = raw.commandSafetyJudge;
   }
   if (raw.secretScan !== undefined) {
     result.secretScan = raw.secretScan;

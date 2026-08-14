@@ -10,6 +10,7 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import {
+  createTimedOutPermissionDecision,
   type PermissionPromptDecision,
   type RequestPermissionOptions,
   requestPermissionDecisionFromUi,
@@ -47,11 +48,19 @@ export interface PermissionPromptView {
   mode: ExtensionContext["mode"];
   ui: PermissionPromptUi;
   doublePressToConfirm: boolean;
+  /**
+   * Auto-deny the ask after this many milliseconds of no answer; `0` waits
+   * indefinitely. Drives the TUI dialog's internal timer and the RPC
+   * select/input `{ timeout }` parameter.
+   */
+  askTimeoutMs: number;
 }
 
 /** Live prompt-behavior preferences read at prompt time (see `doublePressToConfirm`). */
 export interface PromptPreferences {
   doublePressToConfirm: boolean;
+  /** See `PermissionPromptView.askTimeoutMs`. */
+  askTimeoutMs: number;
 }
 
 /**
@@ -70,7 +79,10 @@ export function requestPermissionDecision(
   if (view.mode === "tui") {
     return presentInlinePermissionPrompt(view, title, message, options);
   }
-  return requestPermissionDecisionFromUi(view.ui, title, message, options);
+  return requestPermissionDecisionFromUi(view.ui, title, message, {
+    ...options,
+    askTimeoutMs: view.askTimeoutMs,
+  });
 }
 
 /** Minimal theme surface the dialog uses; satisfied by the real SDK theme. */
@@ -101,8 +113,26 @@ export function presentInlinePermissionPrompt(
     sessionScope: options?.sessionScope,
   };
   return view.ui.custom<PermissionPromptDecision>(
-    (tui, theme, keybindings, done) =>
-      new PermissionPromptComponent(
+    (tui, theme, keybindings, done) => {
+      // Ask-timeout timer: an unanswered ask settles as a timeout denial
+      // (never an approval) once `askTimeoutMs` elapses; any user decision
+      // first clears the timer so the promise resolves exactly once.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      if (view.askTimeoutMs > 0) {
+        timer = setTimeout(() => {
+          timer = undefined;
+          settle(createTimedOutPermissionDecision());
+        }, view.askTimeoutMs);
+        timer.unref?.();
+      }
+      const settle = (decision: PermissionPromptDecision): void => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+        done(decision);
+      };
+      return new PermissionPromptComponent(
         theme,
         config,
         title,
@@ -111,8 +141,9 @@ export function presentInlinePermissionPrompt(
         () => {
           tui.requestRender();
         },
-        done,
-      ),
+        settle,
+      );
+    },
     { overlay: false },
   );
 }

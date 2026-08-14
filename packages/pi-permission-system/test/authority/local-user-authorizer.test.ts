@@ -50,7 +50,10 @@ function makeDeps(
       ui,
       mode: "tui" as const,
       events,
-      getPromptPreferences: () => ({ doublePressToConfirm: true }),
+      getPromptPreferences: () => ({
+        doublePressToConfirm: true,
+        askTimeoutMs: 0,
+      }),
       requestPermissionDecision: decisionFn,
     },
     events,
@@ -115,7 +118,7 @@ describe("LocalUserAuthorizer", () => {
     await authorizer.authorize(makeDetails());
 
     expect(decisionFn).toHaveBeenCalledWith(
-      { mode: "tui", ui, doublePressToConfirm: true },
+      { mode: "tui", ui, doublePressToConfirm: true, askTimeoutMs: 0 },
       "Permission Required",
       "Allow read?",
       undefined,
@@ -155,7 +158,10 @@ describe("LocalUserAuthorizer", () => {
       ui,
       mode: "tui",
       events,
-      getPromptPreferences: () => ({ doublePressToConfirm: true }),
+      getPromptPreferences: () => ({
+        doublePressToConfirm: true,
+        askTimeoutMs: 0,
+      }),
       requestPermissionDecision: decisionFn,
     });
 
@@ -212,7 +218,7 @@ describe("LocalUserAuthorizer", () => {
       );
 
       expect(decisionFn).toHaveBeenCalledWith(
-        { mode: "tui", ui, doublePressToConfirm: true },
+        { mode: "tui", ui, doublePressToConfirm: true, askTimeoutMs: 0 },
         "Permission Required (Subagent)",
         "Allow read?",
         undefined,

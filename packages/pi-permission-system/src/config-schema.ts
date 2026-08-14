@@ -233,6 +233,20 @@ export const unifiedConfigSchema = z
         "Ordered names of registered **live-authority chain links** (e.g. a model judge) to consult before the terminal authorizer (the human, or the subagent-forwarding / headless-deny fallback).\n\nA link reviews an `ask` and returns `allow` / `deny` (with an optional teaching reason) / `defer` to the next link. Three invariants govern the chain:\n\n- **Config order wins.** The order here \u2014 not the order extensions register in \u2014 fixes the security-relevant chain order.\n- **Fail-safe skip.** A name with no registered link is skipped with a warning; the `ask` still reaches the terminal (more prompting, never less).\n- **Opt-in activation.** Installing a judge extension grants it no authority; a link decides nothing until you name it here.\n\nThe chain owner caps every verdict with a bounded-delegation checkpoint: a link's `allow` on an excluded surface (`external_directory` or `path`) is downgraded to `defer`, so a link cannot exceed your policy.\n\nDefaults to an empty list (no links).",
       default: [],
     }),
+    wrapperAllowlist: z.array(z.string().min(1)).optional().meta({
+      description:
+        "Wrapper commands explicitly trusted to bypass the indirection-wrapper deny floor. A command unit whose text starts with any entry keeps its allow instead of being floored to deny. Only add entries you have deliberately vetted.",
+      markdownDescription:
+        'Commands **explicitly trusted** to bypass the indirection-wrapper deny floor.\n\nThe permission system cannot see through indirection wrappers (`sudo`, `env`, `xargs`, `nohup`, `timeout`, …), so a rule that would `allow` such a command is floored to `deny` by default. A command unit whose (trimmed) text **starts with** any entry here keeps its `allow` instead — the wrapper and everything it runs are trusted as written.\n\nOnly add entries you have deliberately vetted; this is the sole escape hatch from the wrapper deny floor.\n\n```json\n"wrapperAllowlist": [\n  "env PYTHONPATH=",\n  "timeout 30s"\n]\n```\n\nDefaults to an empty list (every wrapper `allow` is floored to `deny`).',
+      default: [],
+    }),
+    askTimeoutMs: z.number().int().min(0).optional().meta({
+      description:
+        "Auto-deny an unanswered permission ask after this many milliseconds. 0 disables the timeout (the prompt waits indefinitely). Defaults to 3000.",
+      markdownDescription:
+        "Auto-deny an unanswered permission ask (prompt dialog) after this many milliseconds — the ask settles as a **timeout denial** rather than hanging or silently allowing. `0` disables the timeout (the prompt waits indefinitely for the user). Defaults to `3000`.",
+      default: 3000,
+    }),
     permission: permissionSchema.optional(),
     shellTools: shellToolsSchema.optional(),
     modelJudge: z
@@ -247,6 +261,24 @@ export const unifiedConfigSchema = z
       .meta({
         description:
           "Model mechanism for the built-in 'model-judge' authorizer (feature 2): provider/model/instructions driving the deny-first typo-path reviewer. The link is inert unless named in `authorizerChain` (opt-in activation).",
+        default: undefined,
+      }),
+    commandSafetyJudge: z
+      .object({
+        provider: z.string().min(1).optional(),
+        model: z.string().min(1).optional(),
+        fallbackProvider: z.string().min(1).optional(),
+        fallbackModel: z.string().min(1).optional(),
+        reasoning: z
+          .enum(["minimal", "low", "medium", "high", "xhigh", "max"])
+          .optional(),
+        instructions: z.string().min(1).optional(),
+        timeoutMs: z.number().int().positive().optional(),
+      })
+      .optional()
+      .meta({
+        description:
+          "Model mechanism for the 'command-safety-judge' authorizer: an allow-capable LLM judge that rules on any `ask` with deny/suggest/allow/defer, using a smart model at its top reasoning level. Defaults to glm-5.2 (fallback deepseek-v4-pro) at reasoning 'max'. Inert unless named in `authorizerChain`.",
         default: undefined,
       }),
     denyStorm: z

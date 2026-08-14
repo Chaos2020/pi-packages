@@ -9,6 +9,131 @@ import type { TSNode } from "#src/access-intent/bash/parser";
 // ── Public surface ─────────────────────────────────────────────────────────
 
 /**
+ * The access direction of a bash path token, used to route the token to the
+ * right protection layer:
+ *
+ * - `"read"`  — the path is actually opened/read (file-read commands, script
+ *   execution, redirect input). Checked against the information-security
+ *   `path` surface (deny secret reads).
+ * - `"write"` — the path is modified/moved/removed/overwritten (write
+ *   commands, redirect output). Checked against the integrity-protection
+ *   `path_write` surface (protect key files and secrets from damage).
+ * - `"arg"`   — a business argument passed to a script/program; the shell
+ *   does not treat it as a filesystem target, so neither path layer applies.
+ *
+ * Layering read vs write keeps information security and file integrity as
+ * two independent filters: `cat ~/.env` (read) triggers the secret rule
+ * while `sys-backup.sh is-tracked "$HOME/.env"` (arg) does not, and
+ * `echo x > ~/.bashrc` (write) triggers the key-file rule while
+ * `cat ~/.bashrc` (read) stays allowed.
+ */
+export type BashTokenRole = "read" | "write" | "arg";
+
+/** A bash path-candidate token paired with its access direction. */
+export interface BashTokenRef {
+  readonly text: string;
+  readonly role: BashTokenRole;
+}
+
+/**
+ * Commands whose positional arguments are file-read targets: the argument
+ * path is opened and read, so the information-security `path` surface
+ * applies. Flags and inline patterns are still filtered downstream by the
+ * shape classifiers.
+ */
+const FILE_READ_COMMANDS: ReadonlySet<string> = new Set([
+  "cat",
+  "tac",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "sed",
+  "awk",
+  "gawk",
+  "nawk",
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "vim",
+  "vi",
+  "nano",
+  "diff",
+  "patch",
+  "wc",
+  "sort",
+  "uniq",
+  "cut",
+  "stat",
+  "file",
+  "tar",
+  "unzip",
+  "gunzip",
+  "gzip",
+  "bzip2",
+  "xz",
+  "openssl",
+  "gpg",
+  "ssh-keygen",
+  "find",
+  "rsync",
+  "scp",
+  "cd",
+  "curl",
+  "wget",
+]);
+
+/**
+ * Commands whose positional arguments are write/delete targets: the argument
+ * path is modified, moved, removed, or overwritten, so the integrity
+ * `path_write` surface applies (protect key files, secrets, and configs from
+ * damage).
+ */
+const FILE_WRITE_COMMANDS: ReadonlySet<string> = new Set([
+  "cp",
+  "mv",
+  "rm",
+  "tee",
+  "dd",
+  "shred",
+  "install",
+  "ln",
+  "touch",
+  "mkdir",
+  "chmod",
+  "chown",
+  "truncate",
+]);
+
+/**
+ * Commands whose first positional argument is a script/program to execute
+ * (the shell reads that file to run it) and whose remaining positional
+ * arguments are business arguments passed to the script — never filesystem
+ * targets from the shell's perspective. Only the script argument is a read
+ * target.
+ */
+const SCRIPT_EXEC_COMMANDS: ReadonlySet<string> = new Set([
+  "bash",
+  "sh",
+  "zsh",
+  "dash",
+  "ksh",
+  ".",
+  "source",
+  "python",
+  "python2",
+  "python3",
+  "node",
+  "deno",
+  "bun",
+  "ruby",
+  "perl",
+  "php",
+  "npx",
+]);
+
+/**
  * Recursively visit the AST and collect resolved text of nodes that
  * represent command arguments or redirect destinations.
  *
@@ -19,12 +144,12 @@ import type { TSNode } from "#src/access-intent/bash/parser";
  * as path candidates. For all other commands, collects all
  * arguments generically.
  */
-export function collectPathCandidateTokens(node: TSNode): string[] {
+export function collectPathCandidateTokens(node: TSNode): BashTokenRef[] {
   if (SKIP_SUBTREE_TYPES.has(node.type)) return [];
   if (node.type === "command") return collectCommandTokens(node);
   if (node.type === "file_redirect") return collectRedirectTokens(node);
 
-  const tokens: string[] = [];
+  const tokens: BashTokenRef[] = [];
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (child) tokens.push(...collectPathCandidateTokens(child));
@@ -37,7 +162,7 @@ export function collectPathCandidateTokens(node: TSNode): string[] {
  * commands use `collectPatternCommandTokens`; all others use
  * `collectGenericCommandTokens`.
  */
-export function collectCommandTokens(node: TSNode): string[] {
+export function collectCommandTokens(node: TSNode): BashTokenRef[] {
   const commandName = extractCommandName(node);
   const config = commandName
     ? PATTERN_FIRST_COMMANDS.get(commandName)
@@ -51,13 +176,24 @@ export function collectCommandTokens(node: TSNode): string[] {
 /**
  * Collect redirect-destination tokens from a `file_redirect` node.
  */
-export function collectRedirectTokens(node: TSNode): string[] {
-  const tokens: string[] = [];
+export function collectRedirectTokens(node: TSNode): BashTokenRef[] {
+  const tokens: BashTokenRef[] = [];
+  let write = false;
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
+    if (child.type === "file_descriptor") continue;
+    if (!child.isNamed) {
+      // Anonymous operator token: `<` is input (read); `>`/`>>`/`2>`/`&>`
+      // are output (write). A here-string `<<<` contains no `>` and stays read.
+      if (child.text.includes(">")) write = true;
+      continue;
+    }
     if (ARG_NODE_TYPES.has(child.type)) {
-      tokens.push(resolveNodeText(child));
+      tokens.push({
+        text: resolveNodeText(child),
+        role: write ? "write" : "read",
+      });
     }
   }
   return tokens;
@@ -103,8 +239,8 @@ const OPTION_VALUE_PATTERN = /^-{1,2}[^=\s]+=(.+)$/;
  * here is what lets the projection see option-embedded paths without per-command
  * option tables (ADR 0009, #645).
  */
-function collectEmbeddedOptionValues(node: TSNode): string[] {
-  const values: string[] = [];
+function collectEmbeddedOptionValues(node: TSNode): BashTokenRef[] {
+  const values: BashTokenRef[] = [];
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
@@ -113,7 +249,7 @@ function collectEmbeddedOptionValues(node: TSNode): string[] {
     if (!ARG_NODE_TYPES.has(child.type)) continue;
 
     const value = OPTION_VALUE_PATTERN.exec(resolveNodeText(child))?.[1];
-    if (value !== undefined) values.push(value);
+    if (value !== undefined) values.push({ text: value, role: "arg" });
   }
   return values;
 }
@@ -277,13 +413,13 @@ function classifyPatternCommandFlag(
 function collectPatternCommandTokens(
   node: TSNode,
   config: PatternCommandConfig,
-): string[] {
+): BashTokenRef[] {
   const patternPositionals = config.patternPositionals ?? 1;
   let hasExplicitScript = false;
   let positionalsSeen = 0;
   let nextArgAction: "skip" | "extract" | null = null;
   let pastEndOfFlags = false;
-  const tokens: string[] = [];
+  const tokens: BashTokenRef[] = [];
 
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
@@ -308,7 +444,7 @@ function collectPatternCommandTokens(
       continue;
     }
     if (nextArgAction === "extract") {
-      tokens.push(text);
+      tokens.push({ text, role: "read" });
       nextArgAction = null;
       continue;
     }
@@ -341,8 +477,8 @@ function collectPatternCommandTokens(
       continue; // Skip: this is an inline pattern/script.
     }
 
-    // File argument — collect as path candidate.
-    tokens.push(text);
+    // File argument — collect as a read target.
+    tokens.push({ text, role: "read" });
   }
 
   return tokens;
@@ -350,10 +486,46 @@ function collectPatternCommandTokens(
 
 /**
  * Collect all argument tokens from a generic (non-pattern-first) command node,
- * skipping the command name and variable assignments.
+ * tagging each with its access direction, skipping the command name and
+ * variable assignments.
+ *
+ * The role is derived from the command name: file-read commands (cat/grep/…)
+ * get `read`, write commands (cp/rm/tee/…) get `write`, script executors
+ * (bash/python/…) get script-first handling, `git` gets rev-path handling,
+ * and everything else is a business argument (`arg`).
  */
-function collectGenericCommandTokens(node: TSNode): string[] {
-  const tokens: string[] = [];
+function collectGenericCommandTokens(node: TSNode): BashTokenRef[] {
+  const commandName = extractCommandName(node);
+  if (commandName !== undefined && SCRIPT_EXEC_COMMANDS.has(commandName)) {
+    return collectScriptExecTokens(node);
+  }
+  if (commandName === "git") {
+    return collectGitTokens(node);
+  }
+  return collectPlainGenericTokens(node, argRoleForCommand(commandName));
+}
+
+/**
+ * The read/write role for a generic command's positional arguments, or
+ * `"arg"` for unknown commands (business arguments are not filesystem
+ * targets from the shell's perspective).
+ */
+function argRoleForCommand(commandName: string | undefined): BashTokenRole {
+  if (commandName === undefined) return "arg";
+  if (FILE_READ_COMMANDS.has(commandName)) return "read";
+  if (FILE_WRITE_COMMANDS.has(commandName)) return "write";
+  return "arg";
+}
+
+/**
+ * Collect argument tokens for a command whose positional arguments all share
+ * one role (read, write, or business argument).
+ */
+function collectPlainGenericTokens(
+  node: TSNode,
+  role: BashTokenRole,
+): BashTokenRef[] {
+  const tokens: BashTokenRef[] = [];
   let seenCommandName = false;
 
   for (let i = 0; i < node.childCount; i++) {
@@ -374,13 +546,92 @@ function collectGenericCommandTokens(node: TSNode): string[] {
       continue;
     }
 
-    // Argument nodes: resolve their text and collect.
+    // Argument nodes: resolve their text and collect with the role.
     if (ARG_NODE_TYPES.has(child.type)) {
-      tokens.push(resolveNodeText(child));
+      tokens.push({ text: resolveNodeText(child), role });
       continue;
     }
 
     // Recurse into other children (e.g. command_substitution nested in args)
+    tokens.push(...collectPathCandidateTokens(child));
+  }
+
+  return tokens;
+}
+
+/**
+ * Collect arguments for a script executor (`bash script.sh a b`): the first
+ * non-flag positional is the script path (`read` — the shell reads it to run
+ * it), and every following positional is a business argument (`arg`) that is
+ * handed to the script, not opened by the shell.
+ */
+function collectScriptExecTokens(node: TSNode): BashTokenRef[] {
+  const tokens: BashTokenRef[] = [];
+  let seenCommandName = false;
+  let scriptSeen = false;
+
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child) continue;
+
+    if (child.type === "command_name") {
+      seenCommandName = true;
+      continue;
+    }
+    if (child.type === "variable_assignment") continue;
+
+    if (!seenCommandName && ARG_NODE_TYPES.has(child.type)) {
+      seenCommandName = true;
+      continue;
+    }
+
+    if (ARG_NODE_TYPES.has(child.type)) {
+      const text = resolveNodeText(child);
+      if (!scriptSeen && !(text.startsWith("-") && text.length > 1)) {
+        scriptSeen = true;
+        tokens.push({ text, role: "read" });
+      } else {
+        tokens.push({ text, role: "arg" });
+      }
+      continue;
+    }
+
+    tokens.push(...collectPathCandidateTokens(child));
+  }
+
+  return tokens;
+}
+
+/**
+ * Collect arguments for `git`: a `rev:path` token (`HEAD:.env`) addresses an
+ * object in the repo and is read (`read`); a plain path token (`check-ignore
+ * path`) is a business argument (`arg`) that git compares without opening.
+ */
+function collectGitTokens(node: TSNode): BashTokenRef[] {
+  const tokens: BashTokenRef[] = [];
+  let seenCommandName = false;
+
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child) continue;
+
+    if (child.type === "command_name") {
+      seenCommandName = true;
+      continue;
+    }
+    if (child.type === "variable_assignment") continue;
+
+    if (!seenCommandName && ARG_NODE_TYPES.has(child.type)) {
+      seenCommandName = true;
+      continue;
+    }
+
+    if (ARG_NODE_TYPES.has(child.type)) {
+      const text = resolveNodeText(child);
+      tokens.push({ text, role: text.includes(":") ? "read" : "arg" });
+      continue;
+    }
+
     tokens.push(...collectPathCandidateTokens(child));
   }
 

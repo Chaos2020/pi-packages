@@ -94,7 +94,8 @@ export class BashProgram {
    * are NOT split — a subshell or other compound statement is emitted whole.
    * Each unit has any leading `variable_assignment` prefix stripped, and a
    * wrapper unit (`bash -c`/`eval`, or an indirection wrapper such as `sudo`) is
-   * tagged with a `wrapperKind` so its decision is floored to `ask`.
+   * tagged with a `wrapperKind` so its decision is floored to `deny` (unless
+   * the `wrapperAllowlist` explicitly trusts the unit).
    * May be empty (e.g. an empty command or a comment-only line); callers fall
    * back to the whole command so the surface is never evaluated weaker than
    * before.

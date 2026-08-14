@@ -98,6 +98,8 @@ describe("normalizePermissionSystemConfig", () => {
       permissionReviewLog: false,
       yoloMode: true,
       doublePressToConfirm: true,
+      wrapperAllowlist: [],
+      askTimeoutMs: 3000,
     });
   });
 
@@ -185,6 +187,24 @@ describe("normalizePermissionSystemConfig", () => {
       authorizerChain: ["model-judge", "typo-reviewer"],
     });
     expect(result.authorizerChain).toEqual(["model-judge", "typo-reviewer"]);
+  });
+
+  it("defaults askTimeoutMs to 3000 and wrapperAllowlist to empty", () => {
+    const result = normalizePermissionSystemConfig({});
+    expect(result.askTimeoutMs).toBe(3000);
+    expect(result.wrapperAllowlist).toEqual([]);
+  });
+
+  it("keeps an explicit askTimeoutMs (0 disables the timeout)", () => {
+    const result = normalizePermissionSystemConfig({ askTimeoutMs: 0 });
+    expect(result.askTimeoutMs).toBe(0);
+  });
+
+  it("passes wrapperAllowlist through", () => {
+    const result = normalizePermissionSystemConfig({
+      wrapperAllowlist: ["env FOO=", "timeout 30s"],
+    });
+    expect(result.wrapperAllowlist).toEqual(["env FOO=", "timeout 30s"]);
   });
 
   it("omits authorizerChain when absent", () => {

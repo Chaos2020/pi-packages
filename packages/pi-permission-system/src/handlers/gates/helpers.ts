@@ -96,6 +96,8 @@ export function buildDecisionEvent(
  *                    (indicates the user chose "for this session").
  * @param confirmationUnavailable - True when the denial came from the
  *                    DenyingAuthorizer (no live authority was reachable).
+ * @param timedOut  - True when the ask was auto-denied after `askTimeoutMs`
+ *                    without a user answer (ask-timeout denial).
  */
 export function deriveResolution(
   state: "allow" | "deny" | "ask",
@@ -103,6 +105,7 @@ export function deriveResolution(
   hasSession: boolean,
   confirmationUnavailable: boolean,
   autoApproved = false,
+  timedOut = false,
 ): PermissionDecisionResolution {
   if (state === "allow") return autoApproved ? "auto_approved" : "policy_allow";
   if (state === "deny") return "policy_deny";
@@ -111,5 +114,6 @@ export function deriveResolution(
     if (autoApproved) return "auto_approved";
     return hasSession ? "user_approved_for_session" : "user_approved";
   }
+  if (timedOut) return "ask_timeout";
   return confirmationUnavailable ? "confirmation_unavailable" : "user_denied";
 }

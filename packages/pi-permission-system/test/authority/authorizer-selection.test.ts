@@ -112,7 +112,7 @@ function makeDeps(overrides: Partial<SelectionDeps> = {}): SelectionDeps {
     },
     getPromptPreferences:
       overrides.getPromptPreferences ??
-      (() => ({ doublePressToConfirm: true })),
+      (() => ({ doublePressToConfirm: true, askTimeoutMs: 0 })),
     requestPermissionDecision:
       overrides.requestPermissionDecision ??
       vi.fn().mockResolvedValue({ approved: true, state: "approved" }),

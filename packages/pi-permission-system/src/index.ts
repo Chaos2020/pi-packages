@@ -1,10 +1,16 @@
-import { complete } from "@earendil-works/pi-ai";
+import { complete, completeSimple } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
 import { warmBashParser } from "./access-intent/bash/parser";
 import { buildResolvedIntentFromMatchValues } from "./access-intent/input-normalizer";
 import { AuthorizerRegistry } from "./authority/authorizer-registry";
 import { AuthorizerSelection } from "./authority/authorizer-selection";
+import {
+  type CommandSafetyJudgeConfig,
+  resolveCommandSafetyConfig,
+} from "./authority/command-safety-config";
+import { createCommandSafetyJudge } from "./authority/command-safety-judge";
+import type { CompleteSimpleFn } from "./authority/command-safety-review";
 import {
   ForwardedRequestServer,
   type ServingPolicy,
@@ -24,7 +30,7 @@ import { ConfigStore } from "./config-store";
 import { DecisionAudit } from "./decision-audit";
 import { GateDecisionReporter } from "./decision-reporter";
 import { DenyStormMonitor } from "./deny-storm";
-import { isYoloModeEnabled } from "./extension-config";
+import { DEFAULT_ASK_TIMEOUT_MS, isYoloModeEnabled } from "./extension-config";
 import { computeExtensionPaths } from "./extension-paths";
 import {
   AgentPrepHandler,
@@ -126,6 +132,8 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     events: pi.events,
     getPromptPreferences: () => ({
       doublePressToConfirm: configStore.current().doublePressToConfirm,
+      askTimeoutMs:
+        configStore.current().askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
     }),
     requestPermissionDecision,
     forwardingDir: paths.forwardingDir,
@@ -219,6 +227,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     formatterRegistry,
     accessExtractorRegistry,
     authorizerRegistry,
+    () => configStore.current().wrapperAllowlist ?? [],
   );
 
   // Subscribe to @gotgenes/pi-subagents' child lifecycle events so child
@@ -337,9 +346,41 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     }
   }
 
+  // Feature: command-safety-judge — an allow-capable LLM authorizer that rules
+  // on any `ask` with deny/suggest/allow/defer. Inert unless named in
+  // authorizerChain. Uses completeSimple so it runs at the model's top reasoning.
+  let commandSafetyRegistered = false;
+  function registerCommandSafetyJudge(ctx: unknown): void {
+    if (commandSafetyRegistered) return;
+    const raw = configStore.current().commandSafetyJudge;
+    const csConfig = resolveCommandSafetyConfig(raw);
+    if (!csConfig) return;
+    const registry = (ctx as { modelRegistry?: ModelRegistryLike })
+      .modelRegistry;
+    try {
+      authorizerRegistry.register(
+        "command-safety-judge",
+        createCommandSafetyJudge({
+          getConfig: () => csConfig,
+          getRegistry: () => registry,
+          // Double cast: CompleteSimpleFn is a structural projection of pi-ai's
+          // `completeSimple`; the cast is checked against the projection only.
+          completeSimple: completeSimple as unknown as CompleteSimpleFn,
+          getCwd: () => undefined,
+        }),
+      );
+      commandSafetyRegistered = true;
+    } catch (error) {
+      logger.review("permission_request.command_safety_judge_register_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   pi.on("session_start", (event, ctx) => {
     const result = lifecycle.handleSessionStart(event, ctx);
     registerModelJudge(ctx);
+    registerCommandSafetyJudge(ctx);
     return result;
   });
   pi.on("resources_discover", (event, ctx) =>

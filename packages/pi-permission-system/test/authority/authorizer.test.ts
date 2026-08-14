@@ -40,7 +40,7 @@ function makeDeps(
     },
     getPromptPreferences:
       overrides.getPromptPreferences ??
-      (() => ({ doublePressToConfirm: true })),
+      (() => ({ doublePressToConfirm: true, askTimeoutMs: 0 })),
     requestPermissionDecision:
       overrides.requestPermissionDecision ??
       vi.fn().mockResolvedValue({ approved: true, state: "approved" }),

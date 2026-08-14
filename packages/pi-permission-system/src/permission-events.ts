@@ -97,7 +97,8 @@ export type PermissionDecisionResolution =
   | "user_approved_for_session"
   | "user_denied"
   | "auto_approved"
-  | "confirmation_unavailable";
+  | "confirmation_unavailable"
+  | "ask_timeout";
 
 /** Payload emitted on `permissions:decision`. */
 export interface PermissionDecisionEvent {

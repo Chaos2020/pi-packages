@@ -5,8 +5,19 @@ import type { PromptPermissionDetails } from "#src/authority/permission-prompter
 import type { PermissionQuery } from "#src/service";
 import { makeAuthorizerLog } from "#test/helpers/authorizer-log-fixtures";
 
-function makeQuery(): PermissionQuery {
-  return { checkPermission: vi.fn(), getToolPermission: vi.fn() };
+function makeQuery(
+  pathState: "allow" | "deny" | "ask" | undefined = undefined,
+): PermissionQuery {
+  const checkPermission = vi.fn();
+  if (pathState !== undefined) {
+    checkPermission.mockReturnValue({
+      state: pathState,
+      matchedPattern: "*",
+      source: "special",
+      origin: "global",
+    });
+  }
+  return { checkPermission, getToolPermission: vi.fn() };
 }
 
 /** Build details whose gate-computed surface is `accessIntentSurface`. */
@@ -51,9 +62,25 @@ describe("encloseInDelegationEnvelope", () => {
       expect(verdict).toEqual({ kind: "defer" });
     });
 
-    it("downgrades an allow on the path surface", async () => {
+    it("downgrades an allow on a deny-matched path (fine-grained #620)", async () => {
+      const denyQuery = makeQuery("deny");
       const enclosed = encloseInDelegationEnvelope(makeLink({ kind: "allow" }));
-      const verdict = await enclosed(makeDetails("path"), query, log);
+      const verdict = await enclosed(makeDetails("path"), denyQuery, log);
+      expect(verdict).toEqual({ kind: "defer" });
+    });
+
+    it("keeps an allow on a non-sensitive path (fine-grained #620)", async () => {
+      const allowQuery = makeQuery("allow");
+      const enclosed = encloseInDelegationEnvelope(makeLink({ kind: "allow" }));
+      const verdict = await enclosed(makeDetails("path"), allowQuery, log);
+      expect(verdict).toEqual({ kind: "allow" });
+    });
+
+    it("caps when the query cannot resolve (fail-safe)", async () => {
+      // A mock query with no checkPermission return value → undefined → cap.
+      const unresolvedQuery = makeQuery();
+      const enclosed = encloseInDelegationEnvelope(makeLink({ kind: "allow" }));
+      const verdict = await enclosed(makeDetails("path"), unresolvedQuery, log);
       expect(verdict).toEqual({ kind: "defer" });
     });
 

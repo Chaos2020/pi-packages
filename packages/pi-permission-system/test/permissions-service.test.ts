@@ -146,6 +146,7 @@ describe("checkPermission", () => {
       "cd /repo && npm install x",
       "my-agent",
       resolver,
+      [],
     );
     expect(result).toBe(expected);
   });
@@ -157,6 +158,7 @@ describe("checkPermission", () => {
       "",
       undefined,
       resolver,
+      [],
     );
   });
 

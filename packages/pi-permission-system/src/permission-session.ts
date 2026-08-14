@@ -232,6 +232,16 @@ export class PermissionSession implements ToolCallGateInputs {
     return this.config.shellTools;
   }
 
+  /**
+   * The configured wrapper allowlist (`wrapperAllowlist`), consulted by the
+   * bash-command gate so explicitly trusted wrapper commands bypass the
+   * indirection-wrapper deny floor. Empty when unconfigured — every wrapper
+   * `allow` is floored to `deny`.
+   */
+  getWrapperAllowlist(): readonly string[] {
+    return this.config.wrapperAllowlist ?? [];
+  }
+
   // ── Path normalization ────────────────────────────────────────────────
 
   /**

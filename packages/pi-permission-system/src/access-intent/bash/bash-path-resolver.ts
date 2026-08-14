@@ -10,6 +10,8 @@ import {
   classifyTokenAsRuleCandidate,
 } from "#src/access-intent/bash/token-classification";
 import {
+  type BashTokenRef,
+  type BashTokenRole,
   collectCommandTokens,
   collectPathCandidateTokens,
   collectRedirectTokens,
@@ -42,6 +44,8 @@ type EffectiveBase =
 interface PathCandidate {
   readonly token: string;
   readonly base: EffectiveBase;
+  /** Access direction of the token: read / write / business argument. */
+  readonly role: BashTokenRole;
 }
 
 // ── Public output types ──────────────────────────────────────────────────────
@@ -51,6 +55,13 @@ export interface BashPathRuleCandidate {
   readonly token: string;
   /** The path's lexical and canonical forms for permission policy matching. */
   readonly path: AccessPath;
+  /**
+   * Access direction of the token: read / write / business argument.
+   * The gate routes `read` to the `path` surface, `write` to the
+   * `path_write` surface, and skips `arg` (a business argument is not a
+   * filesystem target from the shell's perspective).
+   */
+  readonly role: BashTokenRole;
 }
 
 /**
@@ -418,13 +429,13 @@ export class BashPathResolver {
     const seen = new Set<string>();
     const externalPaths: AccessPath[] = [];
 
-    for (const { token, base } of candidates) {
+    for (const { token, base, role } of candidates) {
       const candidate = classifyTokenAsPathCandidate(token);
       if (!candidate) {
         // A bare token the strict shape gate rejects can still escape the tree
         // through a symlink, so probe it and apply the ordinary boundary
         // decision to whatever it resolves to (#645).
-        const probed = this.probeBareToken(token, base);
+        const probed = this.probeBareToken(token, base, role);
         if (probed) this.collectIfExternal(probed.path, seen, externalPaths);
         continue;
       }
@@ -514,15 +525,19 @@ export class BashPathResolver {
     const seen = new Set<string>();
     const result: BashPathRuleCandidate[] = [];
 
-    for (const { token, base } of candidates) {
+    for (const { token, base, role } of candidates) {
       const shaped = classifyTokenAsRuleCandidate(
         token,
         this.normalizer.flavor,
       );
       const candidate =
         shaped === null
-          ? this.probeBareToken(token, base)
-          : { token: shaped, path: this.buildRuleCandidatePath(shaped, base) };
+          ? this.probeBareToken(token, base, role)
+          : {
+              token: shaped,
+              path: this.buildRuleCandidatePath(shaped, base),
+              role,
+            };
       if (!candidate) continue;
 
       const matchValues = candidate.path.matchValues();
@@ -558,6 +573,7 @@ export class BashPathResolver {
   private probeBareToken(
     token: string,
     base: EffectiveBase,
+    role: BashTokenRole,
   ): BashPathRuleCandidate | null {
     const bare = classifyBareTokenCandidate(token);
     if (bare === null) return null;
@@ -568,7 +584,7 @@ export class BashPathResolver {
     });
     const lexical = path.value();
     if (!lexical || !this.normalizer.entryExists(lexical)) return null;
-    return { token: bare, path };
+    return { token: bare, path, role };
   }
 
   private buildRuleCandidatePath(
@@ -618,11 +634,13 @@ function isBackgrounded(seqNode: TSNode, index: number): boolean {
 }
 
 function tagTokens(
-  tokens: readonly string[],
+  tokens: readonly BashTokenRef[],
   base: EffectiveBase,
   out: PathCandidate[],
 ): void {
-  for (const token of tokens) out.push({ token, base });
+  for (const { text, role } of tokens) {
+    out.push({ token: text, base, role });
+  }
 }
 
 /**

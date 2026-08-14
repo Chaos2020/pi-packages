@@ -84,6 +84,24 @@
         "minLength": 1
       }
     },
+    "wrapperAllowlist": {
+      "description": "Wrapper commands explicitly trusted to bypass the indirection-wrapper deny floor. A command unit whose text starts with any entry keeps its allow instead of being floored to deny. Only add entries you have deliberately vetted.",
+      "markdownDescription": "Commands **explicitly trusted** to bypass the indirection-wrapper deny floor.\n\nThe permission system cannot see through indirection wrappers (`sudo`, `env`, `xargs`, `nohup`, `timeout`, …), so a rule that would `allow` such a command is floored to `deny` by default. A command unit whose (trimmed) text **starts with** any entry here keeps its `allow` instead — the wrapper and everything it runs are trusted as written.\n\nOnly add entries you have deliberately vetted; this is the sole escape hatch from the wrapper deny floor.\n\n```json\n\"wrapperAllowlist\": [\n  \"env PYTHONPATH=\",\n  \"timeout 30s\"\n]\n```\n\nDefaults to an empty list (every wrapper `allow` is floored to `deny`).",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "askTimeoutMs": {
+      "description": "Auto-deny an unanswered permission ask after this many milliseconds. 0 disables the timeout (the prompt waits indefinitely). Defaults to 3000.",
+      "markdownDescription": "Auto-deny an unanswered permission ask (prompt dialog) after this many milliseconds — the ask settles as a **timeout denial** rather than hanging or silently allowing. `0` disables the timeout (the prompt waits indefinitely for the user). Defaults to `3000`.",
+      "default": 3000,
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
     "permission": {
       "type": "object",
       "propertyNames": {
@@ -195,6 +213,42 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "commandSafetyJudge": {
+      "description": "Model mechanism for the 'command-safety-judge' authorizer: an allow-capable LLM judge that rules on any `ask` with deny/suggest/allow/defer, using a smart model at its top reasoning level. Defaults to glm-5.2 (fallback deepseek-v4-pro) at reasoning 'max'. Inert unless named in `authorizerChain`.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fallbackProvider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fallbackModel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reasoning": {
+          "type": "string",
+          "enum": ["minimal", "low", "medium", "high", "xhigh", "max"]
+        },
+        "instructions": {
+          "type": "string",
+          "minLength": 1
         },
         "timeoutMs": {
           "type": "integer",

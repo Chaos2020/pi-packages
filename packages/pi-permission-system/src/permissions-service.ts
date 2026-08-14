@@ -47,7 +47,13 @@ export class LocalPermissionsService implements PermissionsService {
     private readonly formatterRegistry: ToolInputFormatterRegistrar,
     private readonly accessExtractorRegistry: ToolAccessExtractorRegistrar,
     private readonly authorizerRegistry: AuthorizerRegistrar,
+    private readonly getWrapperAllowlist: () => readonly string[] = () => [],
   ) {}
+
+  /** The configured `wrapperAllowlist`, consulted at bash advisory parity. */
+  private wrapperAllowlist(): readonly string[] {
+    return this.getWrapperAllowlist();
+  }
 
   checkPermission(
     surface: string,
@@ -59,7 +65,12 @@ export class LocalPermissionsService implements PermissionsService {
     // the enforcement gate enforces (#309). A cold parser falls back to the
     // whole-string match inside resolveBashAdvisoryCheck.
     if (surface === "bash") {
-      return resolveBashAdvisoryCheck(value ?? "", agentName, this.resolver);
+      return resolveBashAdvisoryCheck(
+        value ?? "",
+        agentName,
+        this.resolver,
+        this.wrapperAllowlist(),
+      );
     }
     const intent = buildAccessIntentForSurface(
       surface,

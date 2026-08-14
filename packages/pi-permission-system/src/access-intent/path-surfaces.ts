@@ -27,4 +27,10 @@ export const PATH_SURFACES: ReadonlySet<string> = new Set([
   ...PATH_BEARING_TOOLS,
   "external_directory",
   "path",
+  // Write-direction protection layer: guards key/config files against
+  // modification, deletion, and secret overwrite from bash write targets
+  // (redirect destinations, cp/mv/rm/tee/...). Kept separate from `path` so
+  // the information-security layer (read-side) and the integrity-protection
+  // layer (write-side) stay independent.
+  "path_write",
 ]);

@@ -1,0 +1,223 @@
+// Package auth implements the GigaPie WebUI user system (auth_spec §2):
+// local users (bcrypt password hashes, no external IdP), server-side session
+// tokens (httpOnly cookie, revocable), role-based authorization
+// (admin/lead/engineer/viewer) and user management (admin only).
+//
+// Session actor equivalence: the authenticated WebUI user is injected through
+// the same actor chain as mTLS certificates (auth_spec §2.3) — a session
+// actor is as authoritative as an mTLS CN for API authorization.
+package auth
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/gigapie/gigapie/internal/store"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// Roles (auth_spec §2.4): viewer read-only; engineer manages own agents;
+// lead manages assigned agents; admin full access.
+const (
+	RoleAdmin    = "admin"
+	RoleLead     = "lead"
+	RoleEngineer = "engineer"
+	RoleViewer   = "viewer"
+)
+
+// ErrInvalidCredentials is returned on wrong username/password.
+var ErrInvalidCredentials = errors.New("invalid username or password")
+
+// ErrUserDisabled is returned when the account is disabled.
+var ErrUserDisabled = errors.New("user disabled")
+
+// ErrUnauthorized is returned when the caller lacks the required role.
+var ErrUnauthorized = errors.New("unauthorized")
+
+// ErrNotFound is returned when a user does not exist.
+var ErrNotFound = errors.New("not found")
+
+// User is the WebUI account row.
+type User struct {
+	ID        string    `json:"id"`
+	Username  string    `json:"username"`
+	Role      string    `json:"role"`
+	Disabled  bool      `json:"disabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Auth manages users and sessions.
+type Auth struct {
+	store      *store.Store
+	sessionTTL time.Duration
+}
+
+// New builds the auth service. sessionTTL defaults to 12h.
+func New(s *store.Store, sessionTTL time.Duration) *Auth {
+	if sessionTTL <= 0 {
+		sessionTTL = 12 * time.Hour
+	}
+	return &Auth{store: s, sessionTTL: sessionTTL}
+}
+
+// HashPassword returns the bcrypt hash (never stored plaintext, auth_spec §2.1).
+func HashPassword(password string) (string, error) {
+	b, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// CreateUser creates a user with the given role (admin action; caller audits).
+func (a *Auth) CreateUser(ctx context.Context, username, password, role string) (User, error) {
+	if username == "" || password == "" {
+		return User{}, errors.New("username and password are required")
+	}
+	switch role {
+	case RoleAdmin, RoleLead, RoleEngineer, RoleViewer:
+	default:
+		return User{}, fmt.Errorf("invalid role %q", role)
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return User{}, fmt.Errorf("hash password: %w", err)
+	}
+	var u User
+	err = a.store.Pool.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash, role)
+		VALUES ($1, $2, $3)
+		RETURNING id::text, username, role, disabled, created_at`,
+		username, hash, role).Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &u.CreatedAt)
+	if err != nil {
+		return User{}, fmt.Errorf("create user: %w", err)
+	}
+	return u, nil
+}
+
+// ListUsers returns all users (admin view).
+func (a *Auth) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := a.store.Pool.Query(ctx, `
+		SELECT id::text, username, role, disabled, created_at FROM users ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// SetUserRole updates a user's role (admin action).
+func (a *Auth) SetUserRole(ctx context.Context, userID, role string) error {
+	switch role {
+	case RoleAdmin, RoleLead, RoleEngineer, RoleViewer:
+	default:
+		return fmt.Errorf("invalid role %q", role)
+	}
+	res, err := a.store.Pool.Exec(ctx, `UPDATE users SET role=$2, updated_at=now() WHERE id=$1`, userID, role)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetUserDisabled enables/disables an account (admin action).
+func (a *Auth) SetUserDisabled(ctx context.Context, userID string, disabled bool) error {
+	res, err := a.store.Pool.Exec(ctx, `UPDATE users SET disabled=$2, updated_at=now() WHERE id=$1`, userID, disabled)
+	if err != nil {
+		return err
+	}
+	if res.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// Login validates credentials and issues a session token (returned to the
+// caller for the httpOnly cookie; only its SHA-256 hash is persisted).
+func (a *Auth) Login(ctx context.Context, username, password string) (token string, u User, err error) {
+	var hash string
+	err = a.store.Pool.QueryRow(ctx, `
+		SELECT id::text, username, password_hash, role, disabled, created_at FROM users WHERE username=$1`,
+		username).Scan(&u.ID, &u.Username, &hash, &u.Role, &u.Disabled, &u.CreatedAt)
+	if err != nil {
+		return "", User{}, ErrInvalidCredentials
+	}
+	if u.Disabled {
+		return "", User{}, ErrUserDisabled
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		return "", User{}, ErrInvalidCredentials
+	}
+	token, err = newToken()
+	if err != nil {
+		return "", User{}, err
+	}
+	tokenHash := HashToken(token)
+	if _, err := a.store.Pool.Exec(ctx, `
+		INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, now() + $3::interval)`,
+		tokenHash, u.ID, a.sessionTTL.String()); err != nil {
+		return "", User{}, fmt.Errorf("create session: %w", err)
+	}
+	return token, u, nil
+}
+
+// UserFromToken resolves a session token to its user (nil user if invalid or
+// revoked/expired). The token is sent in the httpOnly cookie; the server
+// stores only its hash so a DB leak cannot replay sessions.
+func (a *Auth) UserFromToken(ctx context.Context, token string) (*User, error) {
+	if token == "" {
+		return nil, ErrInvalidCredentials
+	}
+	tokenHash := HashToken(token)
+	var u User
+	err := a.store.Pool.QueryRow(ctx, `
+		SELECT u.id::text, u.username, u.role, u.disabled, u.created_at
+		FROM sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
+		  AND NOT u.disabled`, tokenHash).
+		Scan(&u.ID, &u.Username, &u.Role, &u.Disabled, &u.CreatedAt)
+	if err != nil {
+		return nil, ErrInvalidCredentials
+	}
+	return &u, nil
+}
+
+// Logout revokes a session token (server-side revocation, auth_spec §2.2).
+func (a *Auth) Logout(ctx context.Context, token string) error {
+	if token == "" {
+		return nil
+	}
+	_, err := a.store.Pool.Exec(ctx, `UPDATE sessions SET revoked_at=now() WHERE token_hash=$1`, HashToken(token))
+	return err
+}
+
+// newToken returns a 32-byte random hex session token.
+func newToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// HashToken returns the SHA-256 hex digest persisted for a session token.
+func HashToken(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}

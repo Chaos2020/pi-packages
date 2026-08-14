@@ -85,7 +85,7 @@ describe("resolveBashAdvisoryCheck", () => {
       });
     });
 
-    it("floors an opaque wrapper allow to ask", () => {
+    it("floors an opaque wrapper allow to deny", () => {
       const resolver = makeBashResolver({
         'bash -c "rm -rf /"': makeCheckResult({
           state: "allow",
@@ -97,8 +97,9 @@ describe("resolveBashAdvisoryCheck", () => {
         undefined,
         resolver,
       );
-      expect(result.state).toBe("ask");
+      expect(result.state).toBe("deny");
       expect(result.matchedPattern).toBe("<opaque-bash-wrapper>");
+      expect(result.reason).toContain("wrapperAllowlist");
     });
 
     it("fails closed for a non-empty command that parses to zero units", () => {

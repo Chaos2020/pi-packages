@@ -24,6 +24,7 @@ export function resolveBashAdvisoryCheck(
   command: string,
   agentName: string | undefined,
   resolver: ScopedPermissionResolver,
+  wrapperAllowlist: readonly string[] = [],
 ): PermissionCheckResult {
   const commands = parseBashCommandsSync(command);
   if (commands === null) {
@@ -34,5 +35,11 @@ export function resolveBashAdvisoryCheck(
       agentName,
     });
   }
-  return resolveBashCommandCheck(command, commands, agentName, resolver);
+  return resolveBashCommandCheck(
+    command,
+    commands,
+    agentName,
+    resolver,
+    wrapperAllowlist,
+  );
 }

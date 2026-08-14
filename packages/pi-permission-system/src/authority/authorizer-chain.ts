@@ -47,7 +47,14 @@ export function composeAuthorizerChain(
   };
 }
 
-/** Map a link's decisive verdict to a decision; `defer` yields `null`. */
+/**
+ * Map a link's decisive verdict to a decision; `defer` (and `defer`-alone)
+ * yields `null` so the ask falls through to the next link / terminal.
+ *
+ * `suggest` is decisive: it refuses the current call and hands the `alternative`
+ * back to the invoking model as the denial message, so the agent self-corrects
+ * to a no-auth-needed path without a human prompt.
+ */
 function decideFromVerdict(verdict: AuthorizerVerdict) {
   switch (verdict.kind) {
     case "allow":
@@ -56,6 +63,10 @@ function decideFromVerdict(verdict: AuthorizerVerdict) {
       return { approved: true, state: "approved" } as const;
     case "deny":
       return createDeniedPermissionDecision(verdict.reason);
+    case "suggest":
+      // Refuse the current call; the alternative reaches the model as the
+      // denial reason, steering it to a no-auth path (no human prompt).
+      return createDeniedPermissionDecision(verdict.alternative);
     case "defer":
       return null;
   }

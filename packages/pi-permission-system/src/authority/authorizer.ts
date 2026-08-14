@@ -16,14 +16,23 @@ import type { PromptPermissionDetails } from "./permission-prompter";
 import type { SubagentDetector } from "./subagent-detection";
 
 /**
- * A non-terminal chain link's ruling on an `ask`: decide (`allow`/`deny`) or
- * pass the ask on to the next link (`defer`). A `deny` carries an optional
- * teaching `reason` the invoking model sees, so it can self-correct.
+ * A non-terminal chain link's ruling on an `ask`: decide (`allow`/`deny`/
+ * `suggest`) or pass the ask on to the next link (`defer`).
+ *
+ * - `allow` — grant; non-persistent (the bounded-delegation envelope may still
+ *   cap it on a sensitive surface).
+ * - `deny` — refuse with an optional teaching `reason` the invoking model sees.
+ * - `suggest` — refuse the current call but hand back a `alternative` the
+ *   invoking model should adopt instead (a no-auth-needed path); the agent is
+ *   told the alternative and self-corrects without a human prompt.
+ * - `defer` — pass to the next link / terminal; an optional `note` carries a
+ *   risk assessment shown to the operator at the prompt.
  */
 export type AuthorizerVerdict =
   | { kind: "allow" }
   | { kind: "deny"; reason?: string }
-  | { kind: "defer" };
+  | { kind: "suggest"; alternative: string }
+  | { kind: "defer"; note?: string };
 
 /**
  * A non-terminal link in the live-authority chain: reviews an `ask` and may

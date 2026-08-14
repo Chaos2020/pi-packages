@@ -38,7 +38,11 @@ type PromptFactory = (
 /** Pi's default binding for the `app.tools.expand` action. */
 const CTRL_O = "\u000f";
 
-function makeFakeView(doublePressToConfirm: boolean, expandKey = CTRL_O) {
+function makeFakeView(
+  doublePressToConfirm: boolean,
+  expandKey = CTRL_O,
+  askTimeoutMs = 0,
+) {
   const captured: {
     component?: CapturedComponent;
     options?: unknown;
@@ -68,6 +72,7 @@ function makeFakeView(doublePressToConfirm: boolean, expandKey = CTRL_O) {
   const view = {
     mode: "tui",
     doublePressToConfirm,
+    askTimeoutMs,
     ui: {
       select: vi.fn(),
       input: vi.fn(),
@@ -256,6 +261,26 @@ describe("presentInlinePermissionPrompt", () => {
       expect(await promise).toEqual({ approved: true, state: "approved" });
     });
 
+    it("forwards askTimeoutMs to the select flow outside TUI mode", async () => {
+      const custom = vi.fn();
+      const select = vi.fn().mockResolvedValue(undefined);
+      const view = {
+        mode: "rpc",
+        doublePressToConfirm: true,
+        askTimeoutMs: 2500,
+        ui: { select, input: vi.fn(), custom },
+      } as unknown as PermissionPromptView;
+
+      const decision = await requestPermissionDecision(view, "Title", "Msg");
+      expect(select).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(Array),
+        { timeout: 2500 },
+      );
+      expect(decision.approved).toBe(false);
+      expect(decision.timedOut).toBe(true);
+    });
+
     it("falls back to the select flow outside TUI mode", async () => {
       const custom = vi.fn();
       const select = vi.fn().mockResolvedValue("Yes");
@@ -292,6 +317,66 @@ describe("presentInlinePermissionPrompt", () => {
       expect(await runPrompt(false, ["s", ARROW_DOWN, ENTER], options)).toEqual(
         { approved: true, state: "approved_for_serving_session" },
       );
+    });
+  });
+
+  describe("ask timeout (TUI timer)", () => {
+    it("auto-denies with timedOut markers once askTimeoutMs elapses", async () => {
+      vi.useFakeTimers();
+      try {
+        const { view } = makeFakeView(false, CTRL_O, 1000);
+        const promise = presentInlinePermissionPrompt(view, "T", "M");
+        let settled = false;
+        void promise.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(999);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await promise).toMatchObject({
+          approved: false,
+          state: "denied",
+          timedOut: true,
+          confirmationUnavailable: true,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not time out when askTimeoutMs is 0 (waits indefinitely)", async () => {
+      vi.useFakeTimers();
+      try {
+        const { view } = makeFakeView(false); // askTimeoutMs defaults to 0
+        const promise = presentInlinePermissionPrompt(view, "T", "M");
+        let settled = false;
+        void promise.then(() => {
+          settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(settled).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("clears the timer when the user decides before the deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const { view, captured } = makeFakeView(false, CTRL_O, 1000);
+        const promise = presentInlinePermissionPrompt(view, "T", "M");
+        captured.component?.handleInput("y"); // single press (no double-press)
+        expect(await promise).toEqual({ approved: true, state: "approved" });
+        // The timer must have been cleared — no late re-settle crash observable,
+        // and advancing past the deadline leaves the settled value intact.
+        await vi.advanceTimersByTimeAsync(2000);
+        await expect(promise).resolves.toEqual({
+          approved: true,
+          state: "approved",
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

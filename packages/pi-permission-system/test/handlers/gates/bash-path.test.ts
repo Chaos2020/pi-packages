@@ -171,6 +171,149 @@ describe("describeBashPathGate", () => {
     expect(result).toBeNull();
   });
 
+  // ── layered read / write / arg routing ─────────────────────────────────
+
+  it("arg role: a script business argument is not a filesystem target (is-tracked)", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        "/mock/home/.pi/agent/auth.json": makeCheckResult({
+          state: "deny",
+          matchedPattern: "~/.pi/agent/auth.json",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    // `auth.json` is a business argument to sys-backup.sh is-tracked — the
+    // script compares the path string but neither reads nor writes the file,
+    // so neither protection layer fires.
+    const result = await describeGate(
+      makeTcc({
+        input: {
+          command:
+            'bash scripts/sys-backup.sh is-tracked "$HOME/.pi/agent/auth.json"',
+        },
+      }),
+      resolver,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("arg role: git check-ignore on an encrypted backup is not a read", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        "/mock/home/wrk/mySkills/backup/x.env.gpg": makeCheckResult({
+          state: "deny",
+          matchedPattern: "*.env.*",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    const result = await describeGate(
+      makeTcc({
+        input: {
+          command: "git check-ignore backup/x.env.gpg",
+        },
+      }),
+      resolver,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("read role: cat on a secret file still denies (info-security layer)", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        "/mock/home/.pi/agent/auth.json": makeCheckResult({
+          state: "deny",
+          matchedPattern: "~/.pi/agent/auth.json",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    const result = await describeGate(
+      makeTcc({
+        input: { command: 'cat "$HOME/.pi/agent/auth.json"' },
+      }),
+      resolver,
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
+    const desc = result as GateDescriptor;
+    expect(desc.preCheck?.state).toBe("deny");
+    expect(desc.decision.surface).toBe("path");
+  });
+
+  it("write role: redirect to a key config file asks via path_write surface", async () => {
+    const resolve = vi.fn<ScopedPermissionResolver["resolve"]>();
+    resolve.mockImplementation((intent) => {
+      if (intent.kind === "access-path") {
+        const values = intent.path.matchValues();
+        if (values.some((v) => v.includes("settings.json"))) {
+          return makeCheckResult({
+            state: intent.surface === "path_write" ? "ask" : "allow",
+            matchedPattern: "~/.pi/agent/settings.json",
+          });
+        }
+      }
+      return makeCheckResult({ state: "allow" });
+    });
+    const result = await describeGate(
+      makeTcc({
+        input: { command: 'echo x > "$HOME/.pi/agent/settings.json"' },
+      }),
+      { resolve },
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
+    const desc = result as GateDescriptor;
+    expect(desc.preCheck?.state).toBe("ask");
+    expect(desc.decision.surface).toBe("path_write");
+    expect(desc.sessionApproval?.toGateApproval()?.surface).toBe("path_write");
+  });
+
+  it("write role: redirect into .env denies via path_write AND path", async () => {
+    const resolve = vi.fn<ScopedPermissionResolver["resolve"]>();
+    resolve.mockImplementation((intent) => {
+      if (intent.kind === "access-path") {
+        const values = intent.path.matchValues();
+        if (values.some((v) => v.endsWith(".env"))) {
+          return makeCheckResult({
+            state: "deny",
+            matchedPattern: "*.env",
+          });
+        }
+      }
+      return makeCheckResult({ state: "allow" });
+    });
+    const result = await describeGate(
+      makeTcc({ input: { command: "echo secret > .env" } }),
+      { resolve },
+    );
+    expect(result).not.toBeNull();
+    const desc = result as GateDescriptor;
+    expect(desc.preCheck?.state).toBe("deny");
+    expect(desc.decision.surface).toBe("path_write");
+  });
+
+  it("read role: stdin redirect of a secret file denies (read layer)", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        "/mock/home/.ssh/id_rsa": makeCheckResult({
+          state: "deny",
+          matchedPattern: "~/.ssh/*",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    const result = await describeGate(
+      makeTcc({
+        input: { command: 'cat < "$HOME/.ssh/id_rsa"' },
+      }),
+      resolver,
+    );
+    expect(result).not.toBeNull();
+    expect((result as GateDescriptor).preCheck?.state).toBe("deny");
+  });
+
   it("evaluates most restrictive across multiple tokens", async () => {
     const resolver = makePathDispatchResolver(
       { "src/foo.ts": makeCheckResult({ state: "allow" }) },

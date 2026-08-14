@@ -176,6 +176,7 @@ export class GateRunner {
 
     let autoApproved = false;
     let confirmationUnavailable = false;
+    let timedOut = false;
     const gateResult = await applyPermissionGate({
       state: check.state,
       sessionApproval: descriptor.sessionApproval?.toGateApproval(),
@@ -189,6 +190,7 @@ export class GateRunner {
         });
         autoApproved = decision.autoApproved === true;
         confirmationUnavailable = decision.confirmationUnavailable === true;
+        timedOut = decision.timedOut === true;
         return decision;
       },
       writeLog: (event, details) =>
@@ -214,6 +216,7 @@ export class GateRunner {
           hasSessionApproval,
           confirmationUnavailable,
           autoApproved,
+          timedOut,
         ),
       ),
     );
