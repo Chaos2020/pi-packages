@@ -54,24 +54,47 @@ const WRAPPER_SENTINEL: Record<WrapperKind, string> = {
 
 /**
  * Denial reason attached when a wrapper unit's `allow` is floored to `deny`.
- * Tells the agent (and the operator reading the logs) exactly how to lift the
- * floor for a command they have deliberately vetted.
+ * Deliberately gives no actionable bypass instructions — the agent must ask
+ * the user/operator to vet the command, not discover an escape hatch.
  */
 const WRAPPER_DENY_REASON =
-  "indirection/opaque wrapper cannot be judged safely — denied by default; if you explicitly trust this command, add it to the `wrapperAllowlist` config key";
+  "indirection/opaque wrapper cannot be judged safely — denied by default; ask the user or operator to review and explicitly trust this command if it should run";
 
 /**
- * True when a wrapper command unit's (trimmed) text starts with any
- * `wrapperAllowlist` entry. The allowlist holds only wrapper commands the
- * user has explicitly vetted; a prefix match keeps the unit's `allow`
+ * True when a wrapper command unit matches any `wrapperAllowlist` entry as a
+ * complete token-sequence prefix: the entry is split on whitespace and every
+ * entry token — including the last — must equal the token at the same position
+ * of the unit (C3). A bare string prefix can therefore never match across a
+ * token boundary: the entry `env PYTHONPATH=` does not match
+ * `env PYTHONPATH=/evil sudo rm -rf /` because `PYTHONPATH=` is not equal to
+ * the unit's whole token `PYTHONPATH=/evil`. The allowlist holds only wrapper
+ * commands the user has explicitly vetted; a match keeps the unit's `allow`
  * (no floor).
  */
 function isAllowlistedWrapperUnit(
   text: string,
   allowlist: readonly string[],
 ): boolean {
-  const unit = text.trim();
-  return allowlist.some((entry) => entry.length > 0 && unit.startsWith(entry));
+  const unitTokens = text
+    .trim()
+    .split(/\s+/)
+    .filter((t) => t.length > 0);
+  if (unitTokens.length === 0) return false;
+  return allowlist.some((entry) => {
+    const entryTokens = entry
+      .trim()
+      .split(/\s+/)
+      .filter((t) => t.length > 0);
+    if (entryTokens.length === 0 || entryTokens.length > unitTokens.length) {
+      return false;
+    }
+    // Every entry token — the last included — must be an exact whole-token
+    // match at the same position; never a substring of a longer token.
+    for (let i = 0; i < entryTokens.length; i++) {
+      if (unitTokens[i] !== entryTokens[i]) return false;
+    }
+    return true;
+  });
 }
 
 /**
@@ -79,11 +102,15 @@ function isAllowlistedWrapperUnit(
  * chain whose every unit's command name is in this set, with no write
  * redirect, is auto-allowed without floor-to-ask — it changes nothing.
  *
- * Conservative: commands with write-capable variants (sed -i, awk system(),
- * tee, cp/mv/rm, git commit/push) are excluded. The path/path_write gates
- * still run separately, so secret-file reads stay denied. Wrappers
- * (env/xargs/time — in INDIRECTION_WRAPPER_NAMES) are excluded; their
- * read-only-ness depends on the inner command (handled by the floor path).
+ * Conservative: commands with write-capable variants (sed -i/yq -i, awk
+ * system(), tee, cp/mv/rm, git commit/push) are excluded. Exec-capable names
+ * are excluded too: `find` (-exec/-delete), `command` (exec builtin), and
+ * `less`/`more` (`+!cmd` shell escapes) can all run or remove things (C1/C2).
+ * `printenv` and bare `env` are environment dumps — excluded (M3). `tree`
+ * (-o writes a report file) is excluded. The path/path_write gates still run
+ * separately, so secret-file reads stay denied. Wrappers (env/xargs/time — in
+ * INDIRECTION_WRAPPER_NAMES) are excluded; their read-only-ness depends on the
+ * inner command (handled by the floor path).
  */
 const READONLY_COMMAND_NAMES = new Set([
   "echo",
@@ -101,8 +128,6 @@ const READONLY_COMMAND_NAMES = new Set([
   "cat",
   "head",
   "tail",
-  "less",
-  "more",
   "tac",
   "nl",
   "od",
@@ -114,16 +139,13 @@ const READONLY_COMMAND_NAMES = new Set([
   "realpath",
   "readlink",
   "ls",
-  "find",
   "fd",
   "grep",
   "rg",
   "ack",
   "locate",
-  "tree",
   "which",
   "type",
-  "command",
   "wc",
   "sort",
   "uniq",
@@ -142,26 +164,25 @@ const READONLY_COMMAND_NAMES = new Set([
   "lscpu",
   "lspci",
   "lsusb",
-  "printenv",
   "jq",
-  "yq",
   "bat",
   "exa",
   "eza",
 ]);
 
-/** git subcommands that only read (no repo mutation). */
+/**
+ * git subcommands that only read (no repo mutation). `branch` (`-D` deletes)
+ * and `remote` (`add`/`remove`/`set-url` mutate) are excluded (M1).
+ */
 const READONLY_GIT_SUBCOMMANDS = new Set([
   "log",
   "status",
   "diff",
   "show",
   "blame",
-  "branch",
   "reflog",
   "ls-files",
   "ls-tree",
-  "remote",
   "rev-parse",
   "describe",
   "shortlog",
@@ -170,10 +191,12 @@ const READONLY_GIT_SUBCOMMANDS = new Set([
   "for-each-ref",
 ]);
 
-/** gh subcommands that only read (two-level: resource + action). */
+/**
+ * gh subcommands that only read (two-level: resource + action). `auth token`
+ * dumps a credential — excluded (M1).
+ */
 const READONLY_GH_SUBCOMMANDS = new Set([
   "auth status",
-  "auth token",
   "repo view",
   "issue list",
   "issue view",
@@ -233,9 +256,16 @@ function isReadOnlyChain(
         idx++;
       }
       name = parts[idx++] ?? "";
-      // Wrapper with no inner command (e.g. bare env/time) changes no
-      // file — treat as read-only.
-      if (!name) return true;
+      // Wrapper with no inner command (bare wrapper). `env`/`printenv` alone
+      // dump the whole environment (secrets) into the agent's output, so they
+      // are read-only only when the unit's stdout feeds a downstream pipe
+      // consumer (`piped`) — never standalone (M3). Other bare wrappers
+      // (time/timeout/nohup…) change no file.
+      if (!name) {
+        if (cmd.piped === true) return true;
+        const wrapperName = parts[0] ?? "";
+        return wrapperName !== "env" && wrapperName !== "printenv";
+      }
     }
     if (READONLY_COMMAND_NAMES.has(name)) return true;
     if (name === "git") {
@@ -257,11 +287,12 @@ function isReadOnlyChain(
       return READONLY_GIT_SUBCOMMANDS.has(sub);
     }
     if (name === "gh") {
-      const sub = ((parts[idx] ?? "") + " " + (parts[idx + 1] ?? "")).trim();
+      const sub = `${parts[idx] ?? ""} ${parts[idx + 1] ?? ""}`.trim();
       return READONLY_GH_SUBCOMMANDS.has(sub);
     }
-    if (name === "sed") {
-      // sed without -i/--in-place is read-only stream editing
+    if (name === "sed" || name === "yq") {
+      // sed/yq without -i/--in-place is read-only stream editing (M2: yq -i
+      // edits files in place exactly like sed -i)
       return !parts
         .slice(idx)
         .some(
@@ -303,8 +334,26 @@ export function resolveBashCommandCheck(
 
   // Read-only fast path: a chain of pure read-only commands with no write
   // redirect changes nothing — auto-allow without floor-to-ask. The separate
-  // path/path_write gates still enforce secret-file denies.
-  if (isReadOnlyChain(commands, command)) {
+  // path/path_write gates still enforce secret-file denies. The fast path is
+  // abandoned whenever any unit hits an explicit `deny`/`ask` rule (config or
+  // session — an explicit rule carries `matchedPattern`/session source), so a
+  // deliberate restriction can never be short-circuited by the fast path (C4);
+  // the unit then falls through to the normal resolve + wrapper floor.
+  if (
+    isReadOnlyChain(commands, command) &&
+    !commands.some((cmd) => {
+      const resolved = resolver.resolve({
+        kind: "tool",
+        surface: "bash",
+        input: { command: cmd.text },
+        agentName,
+      });
+      return (
+        resolved.state !== "allow" &&
+        (resolved.matchedPattern !== undefined || resolved.source === "session")
+      );
+    })
+  ) {
     return {
       state: "allow",
       toolName: "bash",

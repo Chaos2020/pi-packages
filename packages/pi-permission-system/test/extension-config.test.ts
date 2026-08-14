@@ -200,6 +200,23 @@ describe("normalizePermissionSystemConfig", () => {
     expect(result.askTimeoutMs).toBe(0);
   });
 
+  it("clamps a negative askTimeoutMs to 0 instead of silently disabling the timeout (m3)", () => {
+    const result = normalizePermissionSystemConfig({ askTimeoutMs: -5 });
+    expect(result.askTimeoutMs).toBe(0);
+  });
+
+  it("falls back to the default for a non-finite askTimeoutMs (m3)", () => {
+    const result = normalizePermissionSystemConfig({
+      askTimeoutMs: Number.POSITIVE_INFINITY,
+    });
+    expect(result.askTimeoutMs).toBe(3000);
+  });
+
+  it("truncates a fractional askTimeoutMs (m3)", () => {
+    const result = normalizePermissionSystemConfig({ askTimeoutMs: 2500.7 });
+    expect(result.askTimeoutMs).toBe(2500);
+  });
+
   it("passes wrapperAllowlist through", () => {
     const result = normalizePermissionSystemConfig({
       wrapperAllowlist: ["env FOO=", "timeout 30s"],

@@ -34,6 +34,14 @@ export interface BashCommand {
    * Absent for an ordinary command.
    */
   readonly wrapperKind?: WrapperKind;
+  /**
+   * True when the unit's stdout feeds a downstream pipe consumer (it is a
+   * non-terminal stage of a pipeline), so its raw output never reaches the
+   * agent directly. Used by the read-only fast path to keep a piped bare
+   * `env`/`printenv` (output filtered by the next stage) read-only while a
+   * standalone environment dump is not (M3). Absent/false otherwise.
+   */
+  readonly piped?: boolean;
 }
 
 // ── Command enumeration ──────────────────────────────────────────────────────
@@ -99,7 +107,7 @@ const NESTED_EXECUTION_CONTEXTS = new Map<string, BashCommandContext>([
  */
 export function collectCommands(node: TSNode): BashCommand[] {
   const out: BashCommand[] = [];
-  collectCommandsInto(node, undefined, out);
+  collectCommandsInto(node, undefined, out, false);
   return out;
 }
 
@@ -107,6 +115,7 @@ function collectCommandsInto(
   node: TSNode,
   context: BashCommandContext | undefined,
   out: BashCommand[],
+  piped: boolean,
 ): void {
   // Anonymous tokens (operators `&&`/`;`/`|`, delimiters `$(`/`)`/`` ` ``/`(`)
   // carry no command.
@@ -115,7 +124,12 @@ function collectCommandsInto(
 
   if (node.type === "command") {
     out.push(
-      makeUnit(commandUnitText(node), context, classifyWrapperCommand(node)),
+      makeUnit(
+        commandUnitText(node),
+        context,
+        classifyWrapperCommand(node),
+        piped,
+      ),
     );
     // A command's text already contains any substitution; descend its subtree
     // to ALSO emit the inner commands of command/process substitutions.
@@ -124,28 +138,52 @@ function collectCommandsInto(
   }
 
   if (node.type === "subshell") {
-    out.push(makeUnit(node.text, context)); // never-weaker whole emit
-    descendCommandChildren(node, "subshell", out);
+    out.push(makeUnit(node.text, context, undefined, piped)); // never-weaker whole emit
+    descendCommandChildren(node, "subshell", out, piped);
+    return;
+  }
+
+  if (node.type === "pipeline") {
+    // Every stage except the last has a downstream pipe consumer, so its
+    // stdout never reaches the agent directly — mark those units `piped`
+    // (or inherit `piped` when the whole pipeline is itself a piped stage).
+    const stages: TSNode[] = [];
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (child?.isNamed && !COMMAND_ENUM_SKIP.has(child.type)) {
+        stages.push(child);
+      }
+    }
+    for (let i = 0; i < stages.length; i++) {
+      collectCommandsInto(
+        stages[i],
+        context,
+        out,
+        piped || i < stages.length - 1,
+      );
+    }
     return;
   }
 
   if (COMMAND_ENUM_DESCEND.has(node.type)) {
-    descendCommandChildren(node, context, out);
+    descendCommandChildren(node, context, out, piped);
     return;
   }
 
   // Any other named statement (compound_statement `{ … }`, if/while/for/case,
   // function_definition): emit whole, do not descend — deferred (#306).
-  out.push(makeUnit(node.text, context));
+  out.push(makeUnit(node.text, context, undefined, piped));
 }
 
 function makeUnit(
   text: string,
   context: BashCommandContext | undefined,
   wrapperKind?: WrapperKind,
+  piped?: boolean,
 ): BashCommand {
   const unit: BashCommand = context ? { text, context } : { text };
-  return wrapperKind ? { ...unit, wrapperKind } : unit;
+  const flagged: BashCommand = wrapperKind ? { ...unit, wrapperKind } : unit;
+  return piped ? { ...flagged, piped: true } : flagged;
 }
 
 /**
@@ -158,7 +196,7 @@ const SHELL_WRAPPER_NAMES = new Set(["bash", "sh", "dash", "zsh", "ksh"]);
  * (not the inner command) is what a bash rule matches. Floored by command-name
  * basename alone. Extend this set to cover another always-invoking wrapper.
  */
-const INDIRECTION_WRAPPER_NAMES = new Set([
+export const INDIRECTION_WRAPPER_NAMES = new Set([
   "sudo",
   "env",
   "xargs",
@@ -185,7 +223,7 @@ const INDIRECTION_WRAPPER_NAMES = new Set([
  * exactly matches one of the tool's exec flags. Extend by adding a tool with
  * its exec-flag set.
  */
-const EXEC_CONDITIONAL_WRAPPERS = new Map<string, ReadonlySet<string>>([
+export const EXEC_CONDITIONAL_WRAPPERS = new Map<string, ReadonlySet<string>>([
   ["find", new Set(["-exec", "-execdir", "-ok", "-okdir"])],
   ["fd", new Set(["-x", "--exec", "-X", "--exec-batch"])],
 ]);
@@ -289,10 +327,11 @@ function descendCommandChildren(
   node: TSNode,
   context: BashCommandContext | undefined,
   out: BashCommand[],
+  piped: boolean,
 ): void {
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
-    if (child) collectCommandsInto(child, context, out);
+    if (child) collectCommandsInto(child, context, out, piped);
   }
 }
 
@@ -308,7 +347,9 @@ function collectSubstitutionCommands(node: TSNode, out: BashCommand[]): void {
     if (!child) continue;
     const nestedContext = NESTED_EXECUTION_CONTEXTS.get(child.type);
     if (nestedContext) {
-      descendCommandChildren(child, nestedContext, out);
+      // Substitution interiors are not pipe stages — `piped` stays false
+      // (conservative: a bare env there is never treated as piped).
+      descendCommandChildren(child, nestedContext, out, false);
     } else {
       collectSubstitutionCommands(child, out);
     }

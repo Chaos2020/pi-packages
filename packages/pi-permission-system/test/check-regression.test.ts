@@ -6,20 +6,55 @@ import { PathNormalizer } from "#src/path-normalizer";
 const flavor = pathFlavorForPlatform(process.platform);
 const nm = new PathNormalizer(flavor, "/mnt/big10T/wrk/mySkills");
 
-describe("wrapper path-token regression check", () => {
-  it("timeout 60 cat .env — is .env still collected?", async () => {
+describe("wrapper path-token regression check (C5)", () => {
+  it("timeout 60 cat .env — .env is collected with role read (enters the path gate)", async () => {
     const p = await BashProgram.parse("timeout 60 cat .env", nm);
-    const cands = p.pathRuleCandidates();
-    const dump = cands.map((c) => `${c.role}:${c.token}`);
-    require("node:fs").writeFileSync("/tmp/regress.txt", JSON.stringify(dump, null, 2));
-    const hasEnv = cands.some((c) => c.token.endsWith(".env"));
-    console.log("HAS_ENV:", hasEnv);
-    expect(true).toBe(true);
+    const env = p
+      .pathRuleCandidates()
+      .find((c) => c.token === ".env" || c.token.endsWith("/.env"));
+    expect(env, "pathRuleCandidates must contain .env").toBeDefined();
+    expect(env?.role).toBe("read");
   });
-  it("nohup rm -rf /tmp/x", async () => {
+
+  it("nohup rm -rf /tmp/x — /tmp/x is collected with role write (enters the path_write gate)", async () => {
     const p = await BashProgram.parse("nohup rm -rf /tmp/x", nm);
-    const dump = p.pathRuleCandidates().map((c) => `${c.role}:${c.token}`);
-    require("node:fs").appendFileSync("/tmp/regress.txt", "\nnohup: " + JSON.stringify(dump));
-    expect(true).toBe(true);
+    const x = p.pathRuleCandidates().find((c) => c.token === "/tmp/x");
+    expect(x, "pathRuleCandidates must contain /tmp/x").toBeDefined();
+    expect(x?.role).toBe("write");
+  });
+
+  it("env FOO=bar cat .env — .env is collected with role read", async () => {
+    const p = await BashProgram.parse("env FOO=bar cat .env", nm);
+    const env = p
+      .pathRuleCandidates()
+      .find((c) => c.token === ".env" || c.token.endsWith("/.env"));
+    expect(env).toBeDefined();
+    expect(env?.role).toBe("read");
+  });
+
+  it("xargs -I{} cp {} /dst — /dst is collected with role write", async () => {
+    const p = await BashProgram.parse("xargs -I{} cp {} /dst", nm);
+    const dst = p.pathRuleCandidates().find((c) => c.token === "/dst");
+    expect(dst).toBeDefined();
+    expect(dst?.role).toBe("write");
+  });
+
+  it("find -exec — tokens fall back to read, never arg", async () => {
+    const p = await BashProgram.parse(
+      'find . -name "*.md" -exec grep -l foo {} \\;',
+      nm,
+    );
+    const roles = p.pathRuleCandidates().map((c) => c.role);
+    expect(roles.length).toBeGreaterThan(0);
+    expect(roles.every((r) => r !== "arg")).toBe(true);
+  });
+
+  it("timeout 60 bash -c payload — opaque inner payload falls back to read, never arg", async () => {
+    const p = await BashProgram.parse(
+      "timeout 60 bash -c 'cat /etc/passwd'",
+      nm,
+    );
+    const roles = p.pathRuleCandidates().map((c) => c.role);
+    expect(roles.every((r) => r !== "arg")).toBe(true);
   });
 });

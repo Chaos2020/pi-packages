@@ -99,7 +99,9 @@ describe("resolveBashAdvisoryCheck", () => {
       );
       expect(result.state).toBe("deny");
       expect(result.matchedPattern).toBe("<opaque-bash-wrapper>");
-      expect(result.reason).toContain("wrapperAllowlist");
+      expect(result.reason).toContain("ask the user");
+      // M4: the denial must not teach the agent a self-service bypass.
+      expect(result.reason).not.toContain("wrapperAllowlist");
     });
 
     it("fails closed for a non-empty command that parses to zero units", () => {

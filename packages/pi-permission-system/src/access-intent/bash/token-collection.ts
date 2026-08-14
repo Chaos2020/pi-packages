@@ -1,5 +1,9 @@
 import { basename } from "node:path";
 import {
+  EXEC_CONDITIONAL_WRAPPERS,
+  INDIRECTION_WRAPPER_NAMES,
+} from "#src/access-intent/bash/command-enumeration";
+import {
   ARG_NODE_TYPES,
   resolveNodeText,
   SKIP_SUBTREE_TYPES,
@@ -163,6 +167,13 @@ export function collectPathCandidateTokens(node: TSNode): BashTokenRef[] {
  * `collectGenericCommandTokens`.
  */
 export function collectCommandTokens(node: TSNode): BashTokenRef[] {
+  // An indirection wrapper (env/timeout/nohup/find -exec/…) hides the real
+  // command: classifying every token by the wrapper name would tag them all
+  // `arg` and let paths escape the path/path_write gates (C5). Penetrate to
+  // the visible inner command and classify by it instead.
+  if (isIndirectionWrapperNode(node)) {
+    return collectIndirectionWrapperTokens(node);
+  }
   const commandName = extractCommandName(node);
   const config = commandName
     ? PATTERN_FIRST_COMMANDS.get(commandName)
@@ -171,6 +182,165 @@ export function collectCommandTokens(node: TSNode): BashTokenRef[] {
     ? collectPatternCommandTokens(node, config)
     : collectGenericCommandTokens(node);
   return [...tokens, ...collectEmbeddedOptionValues(node)];
+}
+
+// ── Indirection-wrapper penetration (C5) ───────────────────────────────────
+
+/**
+ * Shell command names whose `-c` flag introduces an opaque inline program —
+ * mirrors `SHELL_WRAPPER_NAMES` in command-enumeration (kept local to avoid
+ * widening that module's private surface further).
+ */
+const OPAQUE_PAYLOAD_NAMES = new Set([
+  "eval",
+  "bash",
+  "sh",
+  "dash",
+  "zsh",
+  "ksh",
+]);
+
+/**
+ * True when a `command` node is an indirection wrapper (per
+ * `classifyWrapperCommand` semantics): an always-invoking prefix wrapper
+ * (env/timeout/nohup/…) or a search tool carrying a per-result exec flag
+ * (find -exec / fd -x). Opaque payloads (`bash -c`/`eval`) are excluded —
+ * they cannot be penetrated and take the conservative fallback.
+ */
+function isIndirectionWrapperNode(node: TSNode): boolean {
+  const name = extractCommandName(node);
+  if (name === undefined) return false;
+  if (name === "eval") return false;
+  if (INDIRECTION_WRAPPER_NAMES.has(name)) return true;
+  const execFlags = EXEC_CONDITIONAL_WRAPPERS.get(name);
+  if (!execFlags) return false;
+  return commandArgTexts(node).some((text) => execFlags.has(text));
+}
+
+/**
+ * The resolved text of a command node's argument-like named children, after
+ * the command name and excluding `variable_assignment` prefix nodes.
+ */
+function commandArgTexts(node: TSNode): string[] {
+  const texts: string[] = [];
+  let seenName = false;
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child?.isNamed) continue;
+    if (child.type === "command_name") {
+      seenName = true;
+      continue;
+    }
+    if (child.type === "variable_assignment") continue;
+    if (!seenName && ARG_NODE_TYPES.has(child.type)) {
+      seenName = true;
+      continue;
+    }
+    if (ARG_NODE_TYPES.has(child.type)) texts.push(resolveNodeText(child));
+  }
+  return texts;
+}
+
+/**
+ * True when a token is a prefix-wrapper option consumed by the wrapper itself:
+ * a short/long flag, an inline environment assignment (`VAR=value`), or a
+ * numeric duration (`timeout 30s`/`60`). Mirrors the penetration skip in the
+ * bash command gate's read-only fast path.
+ */
+function isPrefixWrapperOption(text: string): boolean {
+  return (
+    (text.startsWith("-") && text.length > 1) ||
+    /^[A-Za-z_][A-Za-z0-9_]*=/.test(text) ||
+    /^\d/.test(text)
+  );
+}
+
+/**
+ * True when an inner command name with its following argument texts forms an
+ * opaque payload (`eval`, or a shell with a `-c` short-flag cluster) that
+ * cannot be penetrated.
+ */
+function isOpaqueInnerCommand(
+  name: string,
+  following: readonly string[],
+): boolean {
+  if (name === "eval") return true;
+  if (!OPAQUE_PAYLOAD_NAMES.has(name)) return false;
+  return following.some(
+    (text) =>
+      text.startsWith("-") && !text.startsWith("--") && text.includes("c"),
+  );
+}
+
+/**
+ * Collect path-candidate tokens for an indirection wrapper by penetrating to
+ * the visible inner command and classifying by it (C5).
+ *
+ * Prefix wrappers (env/timeout/nohup/…, nested ones included): wrapper option
+ * tokens (`-x`, `VAR=v`, durations) are skipped, and the remaining tokens are
+ * classified exactly as if the inner command headed the node — so
+ * `timeout 60 cat .env` tags `.env` `read` and `nohup rm -rf /tmp/x` tags
+ * `/tmp/x` `write`, routing both into the path gates.
+ *
+ * Conservative fallbacks — never a blanket `arg` (that would silently skip the
+ * path gates): an exec-conditional wrapper (find -exec/fd -x, whose options
+ * and search paths interleave), an opaque inner payload (`bash -c`/`eval`),
+ * or a bare wrapper with no inner command collects every argument token as
+ * `read`, the strictly more-checking direction.
+ */
+function collectIndirectionWrapperTokens(node: TSNode): BashTokenRef[] {
+  const wrapperName = extractCommandName(node);
+  if (wrapperName !== undefined && EXEC_CONDITIONAL_WRAPPERS.has(wrapperName)) {
+    return collectPlainGenericTokens(node, "read");
+  }
+  const args = commandArgTexts(node);
+  let i = 0;
+  let innerName: string | undefined;
+  for (;;) {
+    while (i < args.length && isPrefixWrapperOption(args[i])) i++;
+    if (i >= args.length) break;
+    const candidate = basename(args[i]);
+    if (
+      EXEC_CONDITIONAL_WRAPPERS.has(candidate) ||
+      isOpaqueInnerCommand(candidate, args.slice(i + 1))
+    ) {
+      break; // conservatively fall back to read-all
+    }
+    if (INDIRECTION_WRAPPER_NAMES.has(candidate)) {
+      i++; // nested prefix wrapper — keep penetrating
+      continue;
+    }
+    innerName = candidate;
+    break;
+  }
+  if (innerName === undefined) {
+    return collectPlainGenericTokens(node, "read");
+  }
+  const tokens = collectWithCommandRole(node, innerName, args.length - i - 1);
+  return [...tokens, ...collectEmbeddedOptionValues(node)];
+}
+
+/**
+ * Classify a command node's arguments by an explicitly supplied command name
+ * (the penetrated inner command), skipping the wrapper prefix and the inner
+ * command name itself: `skipArgs` argument tokens after the wrapper prefix.
+ */
+function collectWithCommandRole(
+  node: TSNode,
+  commandName: string,
+  skipArgs: number,
+): BashTokenRef[] {
+  const config = PATTERN_FIRST_COMMANDS.get(commandName);
+  if (config) return collectPatternCommandTokens(node, config, skipArgs);
+  if (SCRIPT_EXEC_COMMANDS.has(commandName)) {
+    return collectScriptExecTokens(node, skipArgs);
+  }
+  if (commandName === "git") return collectGitTokens(node, skipArgs);
+  return collectPlainGenericTokens(
+    node,
+    argRoleForCommand(commandName),
+    skipArgs,
+  );
 }
 
 /**
@@ -413,12 +583,14 @@ function classifyPatternCommandFlag(
 function collectPatternCommandTokens(
   node: TSNode,
   config: PatternCommandConfig,
+  skipArgs = 0,
 ): BashTokenRef[] {
   const patternPositionals = config.patternPositionals ?? 1;
   let hasExplicitScript = false;
   let positionalsSeen = 0;
   let nextArgAction: "skip" | "extract" | null = null;
   let pastEndOfFlags = false;
+  let wrapperArgsRemaining = skipArgs;
   const tokens: BashTokenRef[] = [];
 
   for (let i = 0; i < node.childCount; i++) {
@@ -433,6 +605,13 @@ function collectPatternCommandTokens(
     // (e.g. command_substitution) for nested commands.
     if (!ARG_NODE_TYPES.has(child.type)) {
       tokens.push(...collectPathCandidateTokens(child));
+      continue;
+    }
+
+    // Wrapper-penetration prefix (C5): drop the wrapper option tokens and the
+    // inner command name before classifying the payload.
+    if (wrapperArgsRemaining > 0) {
+      wrapperArgsRemaining--;
       continue;
     }
 
@@ -524,9 +703,11 @@ function argRoleForCommand(commandName: string | undefined): BashTokenRole {
 function collectPlainGenericTokens(
   node: TSNode,
   role: BashTokenRole,
+  skipArgs = 0,
 ): BashTokenRef[] {
   const tokens: BashTokenRef[] = [];
   let seenCommandName = false;
+  let wrapperArgsRemaining = skipArgs;
 
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
@@ -548,6 +729,12 @@ function collectPlainGenericTokens(
 
     // Argument nodes: resolve their text and collect with the role.
     if (ARG_NODE_TYPES.has(child.type)) {
+      if (wrapperArgsRemaining > 0) {
+        // Wrapper-penetration prefix (C5): skip the wrapper options and the
+        // inner command name — classification applies to the payload only.
+        wrapperArgsRemaining--;
+        continue;
+      }
       tokens.push({ text: resolveNodeText(child), role });
       continue;
     }
@@ -565,10 +752,11 @@ function collectPlainGenericTokens(
  * it), and every following positional is a business argument (`arg`) that is
  * handed to the script, not opened by the shell.
  */
-function collectScriptExecTokens(node: TSNode): BashTokenRef[] {
+function collectScriptExecTokens(node: TSNode, skipArgs = 0): BashTokenRef[] {
   const tokens: BashTokenRef[] = [];
   let seenCommandName = false;
   let scriptSeen = false;
+  let wrapperArgsRemaining = skipArgs;
 
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
@@ -586,6 +774,11 @@ function collectScriptExecTokens(node: TSNode): BashTokenRef[] {
     }
 
     if (ARG_NODE_TYPES.has(child.type)) {
+      if (wrapperArgsRemaining > 0) {
+        // Wrapper-penetration prefix (C5).
+        wrapperArgsRemaining--;
+        continue;
+      }
       const text = resolveNodeText(child);
       if (!scriptSeen && !(text.startsWith("-") && text.length > 1)) {
         scriptSeen = true;
@@ -607,9 +800,10 @@ function collectScriptExecTokens(node: TSNode): BashTokenRef[] {
  * object in the repo and is read (`read`); a plain path token (`check-ignore
  * path`) is a business argument (`arg`) that git compares without opening.
  */
-function collectGitTokens(node: TSNode): BashTokenRef[] {
+function collectGitTokens(node: TSNode, skipArgs = 0): BashTokenRef[] {
   const tokens: BashTokenRef[] = [];
   let seenCommandName = false;
+  let wrapperArgsRemaining = skipArgs;
 
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
@@ -627,6 +821,11 @@ function collectGitTokens(node: TSNode): BashTokenRef[] {
     }
 
     if (ARG_NODE_TYPES.has(child.type)) {
+      if (wrapperArgsRemaining > 0) {
+        // Wrapper-penetration prefix (C5).
+        wrapperArgsRemaining--;
+        continue;
+      }
       const text = resolveNodeText(child);
       tokens.push({ text, role: text.includes(":") ? "read" : "arg" });
       continue;

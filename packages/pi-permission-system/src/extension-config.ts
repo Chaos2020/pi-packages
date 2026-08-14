@@ -102,6 +102,20 @@ export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {
   askTimeoutMs: DEFAULT_ASK_TIMEOUT_MS,
 };
 
+/**
+ * Normalize `askTimeoutMs` on the plain-object path (m3): the zod schema's
+ * `min(0)` does not run here, so a negative value would otherwise slip through
+ * and silently disable the ask auto-deny timeout. A non-finite or non-number
+ * value falls back to the default; a finite value is clamped to >= 0
+ * (0 = timeout disabled, an explicit legal choice).
+ */
+function normalizeAskTimeoutMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_ASK_TIMEOUT_MS;
+  }
+  return Math.max(0, Math.trunc(value));
+}
+
 function resolveExtensionRoot(moduleUrl = import.meta.url): string {
   return join(dirname(fileURLToPath(moduleUrl)), "..");
 }
@@ -133,7 +147,7 @@ export function normalizePermissionSystemConfig(
     yoloMode: raw.yoloMode === true,
     doublePressToConfirm: raw.doublePressToConfirm !== false,
     wrapperAllowlist: raw.wrapperAllowlist ?? [],
-    askTimeoutMs: raw.askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
+    askTimeoutMs: normalizeAskTimeoutMs(raw.askTimeoutMs),
   };
   if (raw.piInfrastructureReadPaths !== undefined) {
     result.piInfrastructureReadPaths = raw.piInfrastructureReadPaths;
