@@ -35,7 +35,7 @@ export interface PermissionSystemExtensionConfig {
   wrapperAllowlist?: string[];
   /**
    * Auto-deny an unanswered permission ask after this many milliseconds.
-   * 0 disables the timeout. Defaults to DEFAULT_ASK_TIMEOUT_MS (3000).
+   * 0 disables the timeout. Defaults to DEFAULT_ASK_TIMEOUT_MS (10000).
    */
   askTimeoutMs?: number;
   /** Non-bash tools that carry shell semantics, keyed by tool name. */
@@ -91,7 +91,7 @@ export interface PermissionSystemExtensionConfig {
 }
 
 /** Default for `askTimeoutMs`: auto-deny an unanswered ask after 3 seconds. */
-export const DEFAULT_ASK_TIMEOUT_MS = 3000;
+export const DEFAULT_ASK_TIMEOUT_MS = 10000;
 
 export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {
   debugLog: false,

@@ -117,7 +117,16 @@ export function presentInlinePermissionPrompt(
       // Ask-timeout timer: an unanswered ask settles as a timeout denial
       // (never an approval) once `askTimeoutMs` elapses; any user decision
       // first clears the timer so the promise resolves exactly once.
+      // Any user keystroke cancels the timer — once the user has started
+      // interacting (arrow keys/letters/enter/esc), the ask must never be
+      // yanked away by a race with the timeout.
       let timer: ReturnType<typeof setTimeout> | undefined;
+      const cancelTimer = (): void => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      };
       if (view.askTimeoutMs > 0) {
         timer = setTimeout(() => {
           timer = undefined;
@@ -126,10 +135,7 @@ export function presentInlinePermissionPrompt(
         timer.unref?.();
       }
       const settle = (decision: PermissionPromptDecision): void => {
-        if (timer !== undefined) {
-          clearTimeout(timer);
-          timer = undefined;
-        }
+        cancelTimer();
         done(decision);
       };
       return new PermissionPromptComponent(
@@ -142,6 +148,7 @@ export function presentInlinePermissionPrompt(
           tui.requestRender();
         },
         settle,
+        cancelTimer,
       );
     },
     { overlay: false },
@@ -185,6 +192,7 @@ class PermissionPromptComponent implements Component {
     private readonly handleAppAction: (data: string) => boolean,
     private readonly requestRender: () => void,
     private readonly done: (decision: PermissionPromptDecision) => void,
+    private readonly onUserActivity?: () => void,
   ) {
     this.state = initialPromptState(config);
   }
@@ -209,6 +217,9 @@ class PermissionPromptComponent implements Component {
   }
 
   handleInput(data: string): void {
+    // Any user keystroke means the user is actively deciding — stop the
+    // ask-timeout race so the dialog is never yanked away mid-interaction.
+    this.onUserActivity?.();
     if (this.state.step === "reason") {
       this.handleReasonInput(data);
       return;
