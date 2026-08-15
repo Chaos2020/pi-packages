@@ -58,3 +58,9 @@ result
 
 # serena MCP project state (auto-created, local only)
 .serena/
+
+# pi-subagents runtime state (async run status/artifacts)
+.pi/subagents/
+
+# debug debris recycling bin (it.debug convention: temp/deleted/)
+temp/
