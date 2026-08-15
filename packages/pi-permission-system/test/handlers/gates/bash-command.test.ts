@@ -1165,5 +1165,38 @@ describe("resolveBashCommandCheck", () => {
         expect(result.state).toBe("deny");
       }
     });
+
+    it("R1: printenv 2>/tmp/err — redirect operator + destination do not dodge the dump floor", () => {
+      const resolver = makeResolver(bashResult("allow", "printenv", "*"));
+      const result = resolveBashCommandCheck(
+        "printenv 2>/tmp/err",
+        [{ text: "printenv 2>/tmp/err" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("R1: printenv < /dev/null — input redirect is stripped, still a bare dump → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "printenv", "*"));
+      const result = resolveBashCommandCheck(
+        "printenv < /dev/null",
+        [{ text: "printenv < /dev/null" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("R3: command command printenv (nested builtin prefix) → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "printenv", "*"));
+      const result = resolveBashCommandCheck(
+        "command command printenv",
+        [{ text: "command command printenv" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
   });
 });

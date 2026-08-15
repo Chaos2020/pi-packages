@@ -398,19 +398,32 @@ export function resolveBashCommandCheck(
    * entry says otherwise. `printenv VAR` (single variable) is ordinary.
    */
   function isBarePrintenvUnit(cmd: BashCommand): boolean {
-    // Robust to shapes that dodge a naive one-token check (round-4 review):
-    // fd-merge redirects (`printenv 2>&1`), a path-qualified binary
-    // (`/usr/bin/printenv`), and `command`/`exec` prefixes (`command
-    // printenv`) all still dump the whole environment.
+    // Robust to shapes that dodge a naive one-token check (rounds 4-5):
+    // fd-merge redirects (`printenv 2>&1`), plain redirects (`printenv
+    // 2>/tmp/err`, `printenv < /dev/null` — the operator and its destination
+    // are stripped as a pair), a path-qualified binary (`/usr/bin/printenv`),
+    // and nested `command`/`exec` prefixes (`command command printenv`) all
+    // still dump the whole environment.
     const tokens = cmd.text
       .trim()
       .split(/\s+/)
-      .filter((t) => t.length > 0 && !/^\d*>&\d*$/.test(t));
-    if (tokens.length === 0) return false;
+      .filter((t) => t.length > 0);
+    const cleaned: string[] = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      // Redirect operator (`>`, `2>`, `>>`, `2>&1`, `<`, `2<`, `<<<`, …):
+      // drop it together with its destination token.
+      if (/^\d*[<>]/.test(t)) {
+        i++;
+        continue;
+      }
+      cleaned.push(t);
+    }
+    if (cleaned.length === 0) return false;
     let i = 0;
-    if (tokens[0] === "command" || tokens[0] === "exec") i++;
-    const name = basename(tokens[i] ?? "");
-    return name === "printenv" && tokens.length - i === 1;
+    while (cleaned[i] === "command" || cleaned[i] === "exec") i++;
+    const name = basename(cleaned[i] ?? "");
+    return name === "printenv" && cleaned.length - i === 1;
   }
 
   const results = commands.map((cmd) => {
