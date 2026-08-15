@@ -1,13 +1,14 @@
 import type { AccessPath } from "#src/access-intent/access-path";
 import type { BashProgram } from "#src/access-intent/bash/program";
 import type { BashTokenRole } from "#src/access-intent/bash/token-collection";
+import type { PathNormalizer } from "#src/path-normalizer";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import { SessionApproval } from "#src/session-approval";
 import { deriveApprovalPattern } from "#src/session-rules";
 import type { PermissionCheckResult } from "#src/types";
 import { pickMostRestrictive } from "./candidate-check";
 import type { GateResult } from "./descriptor";
-import { accessFactsFromPath } from "./helpers";
+import { accessFactsFromPath, isCreateWithinCwd } from "./helpers";
 import { formatPathAskPrompt } from "./path";
 import type { ToolCallContext } from "./types";
 
@@ -34,6 +35,7 @@ export function describeBashPathGate(
   tcc: ToolCallContext,
   bashProgram: BashProgram | null,
   resolver: ScopedPermissionResolver,
+  normalizer: PathNormalizer,
 ): GateResult {
   if (!bashProgram) return null;
   const command = bashProgram.commandText();
@@ -58,6 +60,16 @@ export function describeBashPathGate(
     // perspective (`sys-backup.sh is-tracked "$HOME/.env"`) — neither
     // protection layer applies, so the token is unrestricted.
     if (role === "arg") {
+      allSessionCovered = false;
+      continue;
+    }
+
+    // Creating a not-yet-existing entry inside the cwd is granted by default:
+    // sensitive-name rules (`*.env`) protect existing secrets, not new
+    // project files. Exempting the token skips both write surfaces
+    // (`path_write` and `path`) at once — the token is unrestricted, exactly
+    // like an `arg`-role business argument.
+    if (role === "write" && isCreateWithinCwd(normalizer, path)) {
       allSessionCovered = false;
       continue;
     }

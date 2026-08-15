@@ -1,6 +1,7 @@
 import type { AccessPath } from "#src/access-intent/access-path";
 import { classifyToolKind } from "#src/access-intent/tool-kind";
 import type { ForwardedAccessFacts } from "#src/authority/permission-forwarding";
+import type { PathNormalizer } from "#src/path-normalizer";
 import type {
   PermissionDecisionEvent,
   PermissionDecisionResolution,
@@ -25,6 +26,31 @@ export function accessFactsFromPath(
     matchValues: path.matchValues(),
     boundaryValue: path.boundaryValue() || null,
   };
+}
+
+/**
+ * True when `accessPath` names a not-yet-existing entry inside the session's
+ * cwd — i.e. the access carries *creation* semantics for a new project file.
+ *
+ * Sensitive-name deny rules (`*.env`, `*.key`) exist to protect existing
+ * secrets, but they glob absolute paths and therefore also catch the act of
+ * creating brand-new files inside the project. The fork's policy grants
+ * in-cwd creation by default, so gates use this predicate to exempt such
+ * targets while leaving existing files and out-of-cwd paths protected.
+ *
+ * An empty `boundaryValue()` (a literal-only path with an unknown base) is
+ * rejected up front: containment cannot be proven for it, so no exemption.
+ */
+export function isCreateWithinCwd(
+  normalizer: PathNormalizer,
+  accessPath: AccessPath,
+): boolean {
+  const boundary = accessPath.boundaryValue();
+  if (!boundary) return false;
+  return (
+    !normalizer.isBoundaryOutsideWorkingDirectory(boundary) &&
+    !normalizer.entryExists(boundary)
+  );
 }
 
 /**

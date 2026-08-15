@@ -211,7 +211,11 @@ describe("handleToolCall — path gate (tools)", () => {
       },
       tools: ["read"],
     });
-    const event = makeToolCallEvent("read", { input: { path: ".env" } });
+    // An absolute out-of-cwd .env keeps the read protected — an in-cwd
+    // not-yet-existing .env is creation semantics and granted by default.
+    const event = makeToolCallEvent("read", {
+      input: { path: "/outside/project/.env" },
+    });
     const result = await handler.handleToolCall(event, makeCtx());
     expect(result).toMatchObject({ action: "block" });
   });

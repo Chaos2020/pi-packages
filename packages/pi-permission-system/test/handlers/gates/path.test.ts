@@ -2,12 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock node:fs so realpathSync (used by canonicalizePath) is controllable.
 // Default implementation is identity — lexical tests are unaffected.
+// lstatSync (used by PathNormalizer.entryExists for the cwd-creation grant)
+// defaults to "entry exists" so deny tests model existing secrets; the
+// creation-grant tests flip it to ENOENT.
 const realpathSync = vi.hoisted(() =>
   vi.fn<(path: string) => string>((p) => p),
 );
+const lstatSync = vi.hoisted(() =>
+  vi.fn<(path: string) => object>(() => ({ isFile: () => true })),
+);
 vi.mock("node:fs", () => ({
   realpathSync,
-  default: { realpathSync },
+  lstatSync,
+  default: { realpathSync, lstatSync },
 }));
 
 import { AccessPath } from "#src/access-intent/access-path";
@@ -50,6 +57,8 @@ describe("describePathGate", () => {
   beforeEach(() => {
     realpathSync.mockReset();
     realpathSync.mockImplementation((p: string) => p);
+    lstatSync.mockReset();
+    lstatSync.mockImplementation(() => ({ isFile: () => true }));
   });
 
   it("returns null for non-path-bearing tools", () => {
@@ -236,6 +245,84 @@ describe("describePathGate", () => {
     expect(intent?.kind === "access-path" && intent.path.matchValues()).toEqual(
       ["/test/project/.env", ".env", "/vault/secret.env"],
     );
+  });
+});
+
+// cwd-creation grant ──────────────────────────────────────────────────────
+//
+// Creating a not-yet-existing entry inside the cwd is allowed by default:
+// sensitive-name deny rules (`*.env`, `*.key`) glob absolute paths and would
+// otherwise also catch brand-new project files. Existing entries and
+// out-of-cwd targets keep their deny outcome.
+
+describe("describePathGate — cwd creation grant", () => {
+  beforeEach(() => {
+    lstatSync.mockReset();
+    lstatSync.mockImplementation(() => ({ isFile: () => true }));
+  });
+
+  it("returns null for a write to a not-yet-existing in-cwd .env matching a *.env deny", () => {
+    lstatSync.mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc({ toolName: "write", input: { path: "credentials.env" } }),
+      resolver,
+      normalizer,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("still denies an existing in-cwd .env (overwrite protection)", () => {
+    // Default lstatSync — the entry exists.
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc({ toolName: "write", input: { path: "credentials.env" } }),
+      resolver,
+      normalizer,
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
+  });
+
+  it("still denies a not-yet-existing .env outside the cwd", () => {
+    lstatSync.mockImplementation(() => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc({ toolName: "write", input: { path: "/test/vault/new.env" } }),
+      resolver,
+      normalizer,
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
+  });
+
+  it("still denies an existing in-cwd key file read via the gateway shape", () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*.key" }),
+    );
+    const result = describePathGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena_read_file",
+          args: { relative_path: "smith.key" },
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
   });
 });
 

@@ -436,6 +436,9 @@ describe("service and gate share one access extractor registry", () => {
     });
 
     const cwd = mkdtempSync(join(tmpdir(), "pi-perm-ext-cwd-"));
+    // The target must exist: a not-yet-existing in-cwd entry carries
+    // creation semantics and is granted by default (isCreateWithinCwd).
+    writeFileSync(join(cwd, ".env"), "SECRET=1\n");
     const pi = makeFakePi({ toolNames: ["ffgrep"] });
     piPermissionSystemExtension(pi as unknown as ExtensionAPI);
 

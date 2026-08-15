@@ -8,7 +8,7 @@ import { SessionApproval } from "#src/session-approval";
 import { deriveApprovalPattern } from "#src/session-rules";
 import type { ToolAccessExtractorLookup } from "#src/tool-access-extractor-registry";
 import type { GateDescriptor, GateResult } from "./descriptor";
-import { accessFactsFromPath } from "./helpers";
+import { accessFactsFromPath, isCreateWithinCwd } from "./helpers";
 import type { ToolCallContext } from "./types";
 
 /**
@@ -54,6 +54,12 @@ export function describePathGate(
   // Skip the gate to preserve backward compatibility: configs without a
   // "path" key should not trigger path-level prompts (#58).
   if (check.matchedPattern === undefined) return null;
+
+  // Creating a not-yet-existing entry inside the cwd is granted by default:
+  // sensitive-name rules (`*.env`) protect existing secrets, not new project
+  // files (isCreateWithinCwd). Existing files and out-of-cwd paths keep
+  // their deny/ask outcome.
+  if (isCreateWithinCwd(normalizer, accessPath)) return null;
 
   // Derive the approval pattern from the lexical absolute form so it matches
   // the policy values a later call produces.
