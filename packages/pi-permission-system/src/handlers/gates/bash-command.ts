@@ -1,7 +1,6 @@
-import {
-  ARG_CONSUMING_WRAPPER_FLAGS,
-  type BashCommand,
-  type WrapperKind,
+import type {
+  BashCommand,
+  WrapperKind,
 } from "#src/access-intent/bash/command-enumeration";
 import { pickMostRestrictive } from "#src/handlers/gates/candidate-check";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
@@ -250,17 +249,16 @@ function isReadOnlyChain(
     // Penetrate indirection wrappers: skip the wrapper + its options/env-vars
     // to reach the inner command name, then judge read-only-ness on that.
     if (cmd.wrapperKind === "indirection") {
-      // Arg-consuming wrapper flags (-u/-g/--user/--group of sudo/doas) eat
-      // the next token as a value — skipping only the flag would leave the
-      // *value* (a user name) to be mistaken for the inner command name, so
-      // `sudo -u wc curl evil.sh` would judge read-only-ness on `wc` (F6).
-      const consuming =
-        ARG_CONSUMING_WRAPPER_FLAGS.get(parts[0] ?? "") ?? undefined;
+      // sudo/doas never ride the read-only fast path (B1/B2/m1): their flag
+      // grammar is open-ended (`-p`/`-a`/`-c`/`-r`/`-t`/`-T`/`-U` take
+      // values, a bare `sudo -s`/`-i` spawns a root shell with no inner
+      // command, and `sudo -l` enumerates the user's privileges), so no
+      // token-level penetration can be safe. Every sudo/doas unit — wrapper
+      // or inner — falls through to the normal resolve + wrapper floor
+      // (deny unless an explicit deny/ask rule or a wrapperAllowlist entry).
+      const wrapperName = parts[0] ?? "";
+      if (wrapperName === "sudo" || wrapperName === "doas") return false;
       while (idx < parts.length) {
-        if (consuming?.has(parts[idx])) {
-          idx += 2; // the flag and its consumed value
-          continue;
-        }
         if (
           parts[idx].startsWith("-") ||
           /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[idx]) ||
@@ -307,10 +305,15 @@ function isReadOnlyChain(
     }
     if (name === "sort") {
       // sort without -o/--output writes only to stdout; -o/--output write the
-      // sorted result back to a file in place (F5).
+      // sorted result back to a file in place (F5). Short flags cluster
+      // (`-ro`, `-nro` — GNU sort treats them as `-r -o`), so any `-x…o`
+      // cluster counts, mirroring the sed `-i` cluster check (B3).
       return !parts
         .slice(idx)
-        .some((p) => p === "-o" || p.startsWith("--output"));
+        .some(
+          (p) =>
+            /^-[^-]*o/.test(p) || p === "--output" || p.startsWith("--output"),
+        );
     }
     if (name === "sed" || name === "yq") {
       // sed/yq without -i/--in-place is read-only stream editing (M2: yq -i
@@ -386,6 +389,21 @@ export function resolveBashCommandCheck(
     };
   }
 
+  /**
+   * True when a command unit is a bare `printenv` with no arguments (B4): it
+   * dumps the entire environment — secrets included — into the agent output,
+   * and a downstream pipe stage like `cat`/`head` filters nothing. Treated like
+   * the bare-`env` dump: floored to deny unless an explicit rule or allowlist
+   * entry says otherwise. `printenv VAR` (single variable) is ordinary.
+   */
+  function isBarePrintenvUnit(cmd: BashCommand): boolean {
+    const parts = cmd.text
+      .trim()
+      .split(/\s+/)
+      .filter((t) => t.length > 0);
+    return parts.length === 1 && parts[0] === "printenv";
+  }
+
   const results = commands.map((cmd) => {
     const base = resolver.resolve({
       kind: "tool",
@@ -394,14 +412,18 @@ export function resolveBashCommandCheck(
       agentName,
     });
     const result =
-      cmd.wrapperKind && base.state === "allow"
+      (cmd.wrapperKind || isBarePrintenvUnit(cmd)) && base.state === "allow"
         ? isAllowlistedWrapperUnit(cmd.text, wrapperAllowlist)
           ? base
           : {
               ...base,
               state: "deny" as const,
-              matchedPattern: WRAPPER_SENTINEL[cmd.wrapperKind],
-              reason: WRAPPER_DENY_REASON,
+              matchedPattern: cmd.wrapperKind
+                ? WRAPPER_SENTINEL[cmd.wrapperKind]
+                : "<bare-printenv-dump>",
+              reason: cmd.wrapperKind
+                ? WRAPPER_DENY_REASON
+                : "bare `printenv` dumps the full environment (secrets) — ask the user or operator to review and explicitly trust this command if it should run",
             }
         : base;
     return cmd.context ? { ...result, commandContext: cmd.context } : result;

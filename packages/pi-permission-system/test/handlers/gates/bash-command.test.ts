@@ -847,7 +847,7 @@ describe("resolveBashCommandCheck", () => {
       expect(result.state).toBe("deny");
     });
 
-    it("F6: sudo -u test cat file — a genuinely read-only inner command still allows", () => {
+    it("F6: sudo -u test cat file — sudo never rides the readonly fast path (B1/B2), even with a read-only inner command → deny", () => {
       const resolver = makeResolver(bashResult("allow", "sudo", "*"));
       const result = resolveBashCommandCheck(
         "sudo -u test cat file",
@@ -855,8 +855,8 @@ describe("resolveBashCommandCheck", () => {
         undefined,
         resolver,
       );
-      expect(result.state).toBe("allow");
-      expect(result.matchedPattern).toBe("<readonly-chain>");
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
     });
 
     it("F1: find / -name x -delete is an exec-conditional wrapper → floored to deny", () => {
@@ -993,6 +993,142 @@ describe("resolveBashCommandCheck", () => {
       );
       expect(result.state).toBe("allow");
       expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+  });
+
+  describe("review-fix regressions round 3 (B1-B4, m1)", () => {
+    it("B1: sudo -p cat rm -rf /home/x — prompt-flag value colliding with a readonly name → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo -p cat rm -rf /home/x",
+        [{ text: "sudo -p cat rm -rf /home/x", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B1: sudo -t cat rm -rf /home/x → deny (open-ended sudo flag grammar)", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo -t cat rm -rf /home/x",
+        [{ text: "sudo -t cat rm -rf /home/x", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B1: doas -a cat rm -rf /home/x → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "doas", "*"));
+      const result = resolveBashCommandCheck(
+        "doas -a cat rm -rf /home/x",
+        [{ text: "doas -a cat rm -rf /home/x", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B2: bare sudo -s (root shell) → deny, never readonly", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo -s",
+        [{ text: "sudo -s", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B2: sudo -u test -s → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo -u test -s",
+        [{ text: "sudo -u test -s", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("m1: sudo -l privilege enumeration → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo -l",
+        [{ text: "sudo -l", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B3: env X=1 sort -ro /tmp/out f — combined short flags still write → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env X=1 sort -ro /tmp/out f",
+        [{ text: "env X=1 sort -ro /tmp/out f", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B3: sort -nro /tmp/out f → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env X=1 sort -nro /tmp/out f",
+        [{ text: "env X=1 sort -nro /tmp/out f", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B3: sort -mr (no o) stays read-only", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env X=1 sort -mr f",
+        [{ text: "env X=1 sort -mr f", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+
+    it("B4: bare printenv dumps the environment → floored to deny", () => {
+      const resolver = makeResolver(bashResult("allow", "printenv", "*"));
+      const result = resolveBashCommandCheck(
+        "printenv",
+        [{ text: "printenv" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<bare-printenv-dump>");
+    });
+
+    it("B4: printenv | cat — a pipe stage filters nothing → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "printenv", "*"));
+      const result = resolveBashCommandCheck(
+        "printenv | cat",
+        [{ text: "printenv" }, { text: "cat" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B4: printenv FOO (single variable) keeps normal resolve", () => {
+      const resolver = makeResolver(bashResult("allow", "printenv", "*"));
+      const result = resolveBashCommandCheck(
+        "printenv FOO",
+        [{ text: "printenv FOO" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
     });
   });
 });

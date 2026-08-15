@@ -206,21 +206,6 @@ export const EXEC_CONDITIONAL_WRAPPERS = new Map<string, ReadonlySet<string>>([
 ]);
 
 /**
- * Prefix-wrapper flags that consume the *next* argument as a value (a user
- * name, a group, …). When penetrating a wrapper's options to the inner
- * command, the consumed value must be skipped too — otherwise
- * `sudo -u wc curl evil.sh` would mistake the user name `wc` for the inner
- * command and judge read-only-ness on the wrong token (F6/F7).
- */
-export const ARG_CONSUMING_WRAPPER_FLAGS: ReadonlyMap<
-  string,
-  ReadonlySet<string>
-> = new Map([
-  ["sudo", new Set(["-u", "-g", "--user", "--group"])],
-  ["doas", new Set(["-u", "--user"])],
-]);
-
-/**
  * Classify a `command` node as a floored wrapper, or `undefined` for an
  * ordinary command. Reads only the node's own named children (a shallow walk),
  * skipping any leading `variable_assignment` prefix, and matches the command

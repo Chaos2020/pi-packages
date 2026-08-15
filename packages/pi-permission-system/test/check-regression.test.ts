@@ -58,11 +58,11 @@ describe("wrapper path-token regression check (C5)", () => {
     expect(roles.every((r) => r !== "arg")).toBe(true);
   });
 
-  it("F7: sudo -u postgres rm -f /data/x — the -u value is skipped, /data/x is write", async () => {
+  it("F7/B1: sudo -u postgres rm -f /data/x — sudo args are conservatively read (never arg), /data/x still enters a path gate", async () => {
     const p = await BashProgram.parse("sudo -u postgres rm -f /data/x", nm);
     const x = p.pathRuleCandidates().find((c) => c.token === "/data/x");
     expect(x, "pathRuleCandidates must contain /data/x").toBeDefined();
-    expect(x?.role).toBe("write");
+    expect(x?.role).toBe("read");
   });
 
   it("F7: sudo -u wc cat /etc/shadow — a readonly user name is not the inner command", async () => {

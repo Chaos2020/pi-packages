@@ -1,6 +1,5 @@
 import { basename } from "node:path";
 import {
-  ARG_CONSUMING_WRAPPER_FLAGS,
   EXEC_CONDITIONAL_WRAPPERS,
   INDIRECTION_WRAPPER_NAMES,
 } from "#src/access-intent/bash/command-enumeration";
@@ -246,8 +245,9 @@ function commandArgTexts(node: TSNode): string[] {
  * True when a token is a prefix-wrapper option consumed by the wrapper itself:
  * a short/long flag, an inline environment assignment (`VAR=value`), or a
  * numeric duration (`timeout 30s`/`60`). Mirrors the penetration skip in the
- * bash command gate's read-only fast path. Arg-consuming flags whose *value*
- * must also be skipped are handled by {@link argConsumingFlagsFor} (F7).
+ * bash command gate's read-only fast path. Wrappers whose flags cannot be
+ * penetrated this way (`sudo`/`doas`, B1) never reach this skip — they are
+ * collected as conservative read-all instead.
  */
 function isPrefixWrapperOption(text: string): boolean {
   return (
@@ -258,16 +258,14 @@ function isPrefixWrapperOption(text: string): boolean {
 }
 
 /**
- * The set of arg-consuming flags for a (prefix) wrapper name, or `undefined`
- * when none are known. Mirrors ARG_CONSUMING_WRAPPER_FLAGS in
- * command-enumeration (kept as a thin accessor for null-safe lookup).
+ * Prefix wrappers whose option grammar cannot be penetrated safely (B1):
+ * `sudo`/`doas` flag sets are open-ended (`-p`/`-a`/`-c`/`-r`/`-t`/`-T`/`-U`
+ * take values, `-s`/`-i` spawn shells, `-l`/`-C` are privileged) — skipping
+ * options by shape would misread a value as the inner command, so every
+ * argument token is collected as `read`, the strictly more-checking
+ * direction (never a blanket `arg`).
  */
-function argConsumingFlagsFor(
-  wrapperName: string | undefined,
-): ReadonlySet<string> | undefined {
-  if (wrapperName === undefined) return undefined;
-  return ARG_CONSUMING_WRAPPER_FLAGS.get(wrapperName);
-}
+const IMPENETRABLE_WRAPPER_NAMES = new Set(["sudo", "doas"]);
 
 /**
  * True when an inner command name with its following argument texts forms an
@@ -298,29 +296,25 @@ function isOpaqueInnerCommand(
  *
  * Conservative fallbacks — never a blanket `arg` (that would silently skip the
  * path gates): an exec-conditional wrapper (find -exec/fd -x, whose options
- * and search paths interleave), an opaque inner payload (`bash -c`/`eval`),
- * or a bare wrapper with no inner command collects every argument token as
- * `read`, the strictly more-checking direction.
+ * and search paths interleave), an unpenetrable wrapper (`sudo`/`doas`, whose
+ * open-ended flag grammar makes option-skipping unsafe, B1), an opaque inner
+ * payload (`bash -c`/`eval`), or a bare wrapper with no inner command collects
+ * every argument token as `read`, the strictly more-checking direction.
  */
 function collectIndirectionWrapperTokens(node: TSNode): BashTokenRef[] {
   const wrapperName = extractCommandName(node);
-  if (wrapperName !== undefined && EXEC_CONDITIONAL_WRAPPERS.has(wrapperName)) {
+  if (
+    wrapperName !== undefined &&
+    (EXEC_CONDITIONAL_WRAPPERS.has(wrapperName) ||
+      IMPENETRABLE_WRAPPER_NAMES.has(wrapperName))
+  ) {
     return collectPlainGenericTokens(node, "read");
   }
   const args = commandArgTexts(node);
   let i = 0;
   let innerName: string | undefined;
-  // Arg-consuming flags (-u/-g/--user/--group of sudo/doas) eat the next
-  // token as a value; skipping only the flag would leave the value (a user
-  // name such as `postgres`) to be mistaken for the inner command, and the
-  // real command's paths would then escape classification (F7).
-  let consuming = argConsumingFlagsFor(wrapperName);
   for (;;) {
     while (i < args.length) {
-      if (consuming?.has(args[i])) {
-        i += 2; // the flag and its consumed value
-        continue;
-      }
       if (isPrefixWrapperOption(args[i])) {
         i++;
         continue;
@@ -330,14 +324,14 @@ function collectIndirectionWrapperTokens(node: TSNode): BashTokenRef[] {
     if (i >= args.length) break;
     const candidate = basename(args[i]);
     if (
+      IMPENETRABLE_WRAPPER_NAMES.has(candidate) ||
       EXEC_CONDITIONAL_WRAPPERS.has(candidate) ||
       isOpaqueInnerCommand(candidate, args.slice(i + 1))
     ) {
       break; // conservatively fall back to read-all
     }
     if (INDIRECTION_WRAPPER_NAMES.has(candidate)) {
-      consuming = argConsumingFlagsFor(candidate); // nested prefix wrapper
-      i++;
+      i++; // nested prefix wrapper — keep penetrating
       continue;
     }
     innerName = candidate;
