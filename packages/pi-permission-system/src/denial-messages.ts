@@ -58,6 +58,12 @@ export type DenialContext =
       agentName?: string;
     }
   | {
+      kind: "tool_path_write";
+      toolName: string;
+      pathValue?: string;
+      agentName?: string;
+    }
+  | {
       kind: "skill_read";
       skillName: string;
       readPath: string;
@@ -121,6 +127,8 @@ function buildDenyBody(ctx: DenialContext): string {
       return `${subject(ctx.agentName)} is not permitted to run bash command '${ctx.command}' which references path(s) outside working directory '${ctx.cwd}': ${formatExternalPathList(ctx.externalPaths)}.`;
     case "bash_path":
       return `${subject(ctx.agentName)} is not permitted to access path '${ctx.pathValue}' via tool 'bash'.`;
+    case "tool_path_write":
+      return `${subject(ctx.agentName)} is not permitted to write path '${ctx.pathValue ?? "<wildcard-scope>"}' via tool '${ctx.toolName}'.`;
     case "skill_read":
       return `${subject(ctx.agentName)} is not permitted to access skill '${ctx.skillName}' via '${ctx.readPath}'.`;
     case "skill_input":
@@ -224,6 +232,8 @@ function buildUnavailableSentence(ctx: DenialContext): string {
       return `Bash command '${ctx.command}' references path(s) outside the working directory and requires approval, but no interactive UI is available.`;
     case "bash_path":
       return `Bash command '${ctx.command}' accesses path '${ctx.pathValue}' which requires approval, but no interactive UI is available.`;
+    case "tool_path_write":
+      return `Writing path '${ctx.pathValue ?? "<wildcard-scope>"}' via tool '${ctx.toolName}' requires approval, but no interactive UI is available.`;
     case "skill_read":
       return `Accessing skill '${ctx.skillName}' requires approval, but no interactive UI is available.`;
     case "skill_input":
@@ -254,6 +264,8 @@ function buildUserDeniedBody(
       return `User denied external directory access for bash command '${ctx.command}'.${reasonSuffix(denialReason)}`;
     case "bash_path":
       return `User denied path access for bash command '${ctx.command}' (path '${ctx.pathValue}').${reasonSuffix(denialReason)}`;
+    case "tool_path_write":
+      return `User denied writing path '${ctx.pathValue ?? "<wildcard-scope>"}' via tool '${ctx.toolName}'.${reasonSuffix(denialReason)}`;
     case "skill_read":
       return `User denied access to skill '${ctx.skillName}'.${reasonSuffix(denialReason)}`;
     case "skill_input":

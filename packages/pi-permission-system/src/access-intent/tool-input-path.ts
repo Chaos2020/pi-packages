@@ -46,7 +46,13 @@ export function getToolInputPath(
       if (custom) {
         return getNonEmptyString(custom(record));
       }
-      return getNonEmptyString(record.path);
+      // Serena-family tools carry the target as `relative_path` (single file
+      // or directory); the conventional `input.path` is the fallback. Without
+      // this, every serena_* tool escapes the cross-cutting path gates.
+      return (
+        getNonEmptyString(record.path) ??
+        getNonEmptyString(record.relative_path)
+      );
     }
   }
 }

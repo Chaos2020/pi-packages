@@ -25,6 +25,7 @@ import { describePathGate } from "./path";
 import type { GateRunner } from "./runner";
 import { describeSkillReadGate } from "./skill-read";
 import { describeToolGate } from "./tool";
+import { describeToolPathWriteGate } from "./tool-path-write";
 import type { GateOutcome, ToolCallContext } from "./types";
 
 /**
@@ -113,6 +114,13 @@ export class ToolCallGatePipeline {
         ),
       () =>
         describePathGate(tcc, this.resolver, normalizer, this.customExtractors),
+      () =>
+        describeToolPathWriteGate(
+          tcc,
+          this.resolver,
+          normalizer,
+          this.customExtractors,
+        ),
       () =>
         describeExternalDirectoryGate(
           tcc,
