@@ -103,17 +103,18 @@ export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {
 };
 
 /**
- * Normalize `askTimeoutMs` on the plain-object path (m3): the zod schema's
- * `min(0)` does not run here, so a negative value would otherwise slip through
- * and silently disable the ask auto-deny timeout. A non-finite or non-number
- * value falls back to the default; a finite value is clamped to >= 0
- * (0 = timeout disabled, an explicit legal choice).
+ * Normalize `askTimeoutMs` on the plain-object path (m3, F8): the zod schema's
+ * `min(0)` does not run here, so an out-of-range value would otherwise slip
+ * through. A negative number falls back to the default — clamping it to 0
+ * would silently *disable* the ask auto-deny timeout, the opposite of the
+ * misconfigured intent — as does a non-finite or non-number value. 0 is legal
+ * only when explicitly passed (timeout disabled).
  */
 function normalizeAskTimeoutMs(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return DEFAULT_ASK_TIMEOUT_MS;
   }
-  return Math.max(0, Math.trunc(value));
+  return Math.trunc(value);
 }
 
 function resolveExtensionRoot(moduleUrl = import.meta.url): string {

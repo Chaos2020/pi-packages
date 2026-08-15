@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import {
+  ARG_CONSUMING_WRAPPER_FLAGS,
   EXEC_CONDITIONAL_WRAPPERS,
   INDIRECTION_WRAPPER_NAMES,
 } from "#src/access-intent/bash/command-enumeration";
@@ -245,7 +246,8 @@ function commandArgTexts(node: TSNode): string[] {
  * True when a token is a prefix-wrapper option consumed by the wrapper itself:
  * a short/long flag, an inline environment assignment (`VAR=value`), or a
  * numeric duration (`timeout 30s`/`60`). Mirrors the penetration skip in the
- * bash command gate's read-only fast path.
+ * bash command gate's read-only fast path. Arg-consuming flags whose *value*
+ * must also be skipped are handled by {@link argConsumingFlagsFor} (F7).
  */
 function isPrefixWrapperOption(text: string): boolean {
   return (
@@ -253,6 +255,18 @@ function isPrefixWrapperOption(text: string): boolean {
     /^[A-Za-z_][A-Za-z0-9_]*=/.test(text) ||
     /^\d/.test(text)
   );
+}
+
+/**
+ * The set of arg-consuming flags for a (prefix) wrapper name, or `undefined`
+ * when none are known. Mirrors ARG_CONSUMING_WRAPPER_FLAGS in
+ * command-enumeration (kept as a thin accessor for null-safe lookup).
+ */
+function argConsumingFlagsFor(
+  wrapperName: string | undefined,
+): ReadonlySet<string> | undefined {
+  if (wrapperName === undefined) return undefined;
+  return ARG_CONSUMING_WRAPPER_FLAGS.get(wrapperName);
 }
 
 /**
@@ -296,8 +310,23 @@ function collectIndirectionWrapperTokens(node: TSNode): BashTokenRef[] {
   const args = commandArgTexts(node);
   let i = 0;
   let innerName: string | undefined;
+  // Arg-consuming flags (-u/-g/--user/--group of sudo/doas) eat the next
+  // token as a value; skipping only the flag would leave the value (a user
+  // name such as `postgres`) to be mistaken for the inner command, and the
+  // real command's paths would then escape classification (F7).
+  let consuming = argConsumingFlagsFor(wrapperName);
   for (;;) {
-    while (i < args.length && isPrefixWrapperOption(args[i])) i++;
+    while (i < args.length) {
+      if (consuming?.has(args[i])) {
+        i += 2; // the flag and its consumed value
+        continue;
+      }
+      if (isPrefixWrapperOption(args[i])) {
+        i++;
+        continue;
+      }
+      break;
+    }
     if (i >= args.length) break;
     const candidate = basename(args[i]);
     if (
@@ -307,7 +336,8 @@ function collectIndirectionWrapperTokens(node: TSNode): BashTokenRef[] {
       break; // conservatively fall back to read-all
     }
     if (INDIRECTION_WRAPPER_NAMES.has(candidate)) {
-      i++; // nested prefix wrapper — keep penetrating
+      consuming = argConsumingFlagsFor(candidate); // nested prefix wrapper
+      i++;
       continue;
     }
     innerName = candidate;

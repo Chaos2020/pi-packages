@@ -200,9 +200,11 @@ describe("normalizePermissionSystemConfig", () => {
     expect(result.askTimeoutMs).toBe(0);
   });
 
-  it("clamps a negative askTimeoutMs to 0 instead of silently disabling the timeout (m3)", () => {
+  it("falls back to the default for a negative askTimeoutMs instead of clamping to 0 (F8/m3)", () => {
+    // Clamping a negative value to 0 would silently *disable* the timeout —
+    // the opposite of what the misconfigured intent needs.
     const result = normalizePermissionSystemConfig({ askTimeoutMs: -5 });
-    expect(result.askTimeoutMs).toBe(0);
+    expect(result.askTimeoutMs).toBe(3000);
   });
 
   it("falls back to the default for a non-finite askTimeoutMs (m3)", () => {

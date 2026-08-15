@@ -26,9 +26,12 @@ describe("wrapper classification (former AST dump)", () => {
     ['eval "cat /etc/passwd"', "opaque-payload"],
     ["env FOO=bar cat .env", "indirection"],
     ["timeout 60 bash -c 'curl x'", "indirection"],
-    // Exec-conditional wrappers without an exec flag run no subcommand.
+    // Exec-conditional wrappers without an exec/write flag run no subcommand.
     ['find . -name "*.md" -type f', undefined],
     ["fd -e ts pattern", undefined],
+    // find's delete/report-write flags floor it like the exec family (F1).
+    ["find / -name x -delete", "indirection"],
+    ["find . -fls /tmp/report", "indirection"],
     // Bare search/read commands are not wrappers.
     ["grep -r pattern src/", undefined],
   ];
@@ -38,16 +41,5 @@ describe("wrapper classification (former AST dump)", () => {
     const units = p.commands();
     expect(units.length).toBeGreaterThan(0);
     expect(units[0]?.wrapperKind, command).toBe(expected);
-  });
-
-  it("marks non-terminal pipeline stages as piped, the last stage as not piped", async () => {
-    const p = await BashProgram.parse("env | grep FOO | head", nm);
-    const piped = p.commands().map((c) => c.piped === true);
-    expect(piped).toEqual([true, true, false]);
-  });
-
-  it("does not mark a standalone command as piped", async () => {
-    const p = await BashProgram.parse("env", nm);
-    expect(p.commands()[0]?.piped).not.toBe(true);
   });
 });

@@ -1,6 +1,7 @@
-import type {
-  BashCommand,
-  WrapperKind,
+import {
+  ARG_CONSUMING_WRAPPER_FLAGS,
+  type BashCommand,
+  type WrapperKind,
 } from "#src/access-intent/bash/command-enumeration";
 import { pickMostRestrictive } from "#src/handlers/gates/candidate-check";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
@@ -103,11 +104,17 @@ function isAllowlistedWrapperUnit(
  * redirect, is auto-allowed without floor-to-ask — it changes nothing.
  *
  * Conservative: commands with write-capable variants (sed -i/yq -i, awk
- * system(), tee, cp/mv/rm, git commit/push) are excluded. Exec-capable names
- * are excluded too: `find` (-exec/-delete), `command` (exec builtin), and
- * `less`/`more` (`+!cmd` shell escapes) can all run or remove things (C1/C2).
- * `printenv` and bare `env` are environment dumps — excluded (M3). `tree`
- * (-o writes a report file) is excluded. The path/path_write gates still run
+ * system(), tee, cp/mv/rm, git commit/push) are excluded — `sort` is handled
+ * specially (-o/--output writes in place, F5). Exec/secret-capable names are
+ * excluded too: `find` (its exec/delete/report-write flags are floored via
+ * EXEC_CONDITIONAL_WRAPPERS, F1), `command` (exec builtin), and `less`/`more`
+ * (`+!cmd` shell escapes) can all run or remove things (C1/C2). `jq`
+ * (`--rawfile`/`--slurpfile` read a file into the output, F3), `rg` (`--pre`
+ * runs a command per matching file, F4), and `fd` (`-x`/`-X` exec per result)
+ * have variants this name-only check cannot gate, so they are excluded
+ * outright. `printenv` and bare `env` are environment dumps — excluded (M3,
+ * F2: a downstream pipe stage like `cat` filters nothing, so a piped `env`
+ * is still a full dump). `tree` (-o writes a report file) is excluded. The path/path_write gates still run
  * separately, so secret-file reads stay denied. Wrappers (env/xargs/time — in
  * INDIRECTION_WRAPPER_NAMES) are excluded; their read-only-ness depends on the
  * inner command (handled by the floor path).
@@ -139,15 +146,12 @@ const READONLY_COMMAND_NAMES = new Set([
   "realpath",
   "readlink",
   "ls",
-  "fd",
   "grep",
-  "rg",
   "ack",
   "locate",
   "which",
   "type",
   "wc",
-  "sort",
   "uniq",
   "cut",
   "tr",
@@ -164,7 +168,6 @@ const READONLY_COMMAND_NAMES = new Set([
   "lscpu",
   "lspci",
   "lsusb",
-  "jq",
   "bat",
   "exa",
   "eza",
@@ -247,22 +250,34 @@ function isReadOnlyChain(
     // Penetrate indirection wrappers: skip the wrapper + its options/env-vars
     // to reach the inner command name, then judge read-only-ness on that.
     if (cmd.wrapperKind === "indirection") {
-      while (
-        idx < parts.length &&
-        (parts[idx].startsWith("-") ||
+      // Arg-consuming wrapper flags (-u/-g/--user/--group of sudo/doas) eat
+      // the next token as a value — skipping only the flag would leave the
+      // *value* (a user name) to be mistaken for the inner command name, so
+      // `sudo -u wc curl evil.sh` would judge read-only-ness on `wc` (F6).
+      const consuming =
+        ARG_CONSUMING_WRAPPER_FLAGS.get(parts[0] ?? "") ?? undefined;
+      while (idx < parts.length) {
+        if (consuming?.has(parts[idx])) {
+          idx += 2; // the flag and its consumed value
+          continue;
+        }
+        if (
+          parts[idx].startsWith("-") ||
           /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[idx]) ||
-          /^\d/.test(parts[idx]))
-      ) {
-        idx++;
+          /^\d/.test(parts[idx])
+        ) {
+          idx++;
+          continue;
+        }
+        break;
       }
       name = parts[idx++] ?? "";
       // Wrapper with no inner command (bare wrapper). `env`/`printenv` alone
-      // dump the whole environment (secrets) into the agent's output, so they
-      // are read-only only when the unit's stdout feeds a downstream pipe
-      // consumer (`piped`) — never standalone (M3). Other bare wrappers
-      // (time/timeout/nohup…) change no file.
+      // dump the whole environment (secrets) into the agent's output — never
+      // read-only, piped or not: a downstream stage like `cat`/`head` filters
+      // nothing, so the dump reaches the agent in full (M3, F2). Other bare
+      // wrappers (time/timeout/nohup…) change no file.
       if (!name) {
-        if (cmd.piped === true) return true;
         const wrapperName = parts[0] ?? "";
         return wrapperName !== "env" && wrapperName !== "printenv";
       }
@@ -289,6 +304,13 @@ function isReadOnlyChain(
     if (name === "gh") {
       const sub = `${parts[idx] ?? ""} ${parts[idx + 1] ?? ""}`.trim();
       return READONLY_GH_SUBCOMMANDS.has(sub);
+    }
+    if (name === "sort") {
+      // sort without -o/--output writes only to stdout; -o/--output write the
+      // sorted result back to a file in place (F5).
+      return !parts
+        .slice(idx)
+        .some((p) => p === "-o" || p.startsWith("--output"));
     }
     if (name === "sed" || name === "yq") {
       // sed/yq without -i/--in-place is read-only stream editing (M2: yq -i

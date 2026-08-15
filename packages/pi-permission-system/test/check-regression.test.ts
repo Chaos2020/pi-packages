@@ -57,4 +57,20 @@ describe("wrapper path-token regression check (C5)", () => {
     const roles = p.pathRuleCandidates().map((c) => c.role);
     expect(roles.every((r) => r !== "arg")).toBe(true);
   });
+
+  it("F7: sudo -u postgres rm -f /data/x — the -u value is skipped, /data/x is write", async () => {
+    const p = await BashProgram.parse("sudo -u postgres rm -f /data/x", nm);
+    const x = p.pathRuleCandidates().find((c) => c.token === "/data/x");
+    expect(x, "pathRuleCandidates must contain /data/x").toBeDefined();
+    expect(x?.role).toBe("write");
+  });
+
+  it("F7: sudo -u wc cat /etc/shadow — a readonly user name is not the inner command", async () => {
+    const p = await BashProgram.parse("sudo -u wc cat /etc/shadow", nm);
+    const shadow = p
+      .pathRuleCandidates()
+      .find((c) => c.token === "/etc/shadow");
+    expect(shadow, "pathRuleCandidates must contain /etc/shadow").toBeDefined();
+    expect(shadow?.role).toBe("read");
+  });
 });
