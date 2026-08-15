@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   getPathBearingToolPath,
   getToolInputPath,
+  unwrapGatewayCall,
 } from "#src/access-intent/tool-input-path";
 import type { ToolAccessExtractorLookup } from "#src/tool-access-extractor-registry";
 
@@ -83,5 +84,67 @@ describe("getToolInputPath", () => {
   test("returns null when a registered extractor declines", () => {
     const extractors = lookupOf("ffgrep", () => undefined);
     expect(getToolInputPath("ffgrep", { target: "x" }, extractors)).toBeNull();
+  });
+
+  test("unwraps a gateway call with args as a JSON string", () => {
+    expect(
+      getToolInputPath("mcp", {
+        tool: "serena_read_file",
+        args: '{"relative_path":".env"}',
+      }),
+    ).toBe(".env");
+  });
+
+  test("returns null for gateway string args that fail JSON.parse", () => {
+    // The gateway dispatch throws before the inner call executes, so there is
+    // no path to gate.
+    expect(
+      getToolInputPath("mcp", { tool: "serena_read_file", args: "{oops" }),
+    ).toBeNull();
+  });
+
+  test("falls through a nested gateway name to the stdio arguments.path shape", () => {
+    expect(
+      getToolInputPath("mcp", { tool: "mcp", arguments: { path: "/tmp/x" } }),
+    ).toBe("/tmp/x");
+  });
+});
+
+describe("unwrapGatewayCall", () => {
+  test("returns the original pair for a non-gateway tool name", () => {
+    expect(unwrapGatewayCall("read", { path: "/src/foo.ts" })).toEqual({
+      toolName: "read",
+      input: { path: "/src/foo.ts" },
+    });
+  });
+
+  test("normalizes a dashed inner tool name like the dispatch does", () => {
+    expect(
+      unwrapGatewayCall("mcp", {
+        tool: "serena-create-text-file",
+        args: { relative_path: "AGENTS.md" },
+      }),
+    ).toEqual({
+      toolName: "serena_create_text_file",
+      input: { relative_path: "AGENTS.md" },
+    });
+  });
+
+  test("parses string args into the effective input", () => {
+    expect(
+      unwrapGatewayCall("mcp", {
+        tool: "serena_read_file",
+        args: '{"relative_path":".env"}',
+      }),
+    ).toEqual({
+      toolName: "serena_read_file",
+      input: { relative_path: ".env" },
+    });
+  });
+
+  test("returns null for string args that fail JSON.parse", () => {
+    expect(
+      unwrapGatewayCall("mcp", { tool: "serena_read_file", args: "nope" }),
+    ).toBeNull();
   });
 });

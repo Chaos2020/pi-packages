@@ -1,4 +1,7 @@
-import { getToolInputPath } from "#src/access-intent/tool-input-path";
+import {
+  getToolInputPath,
+  unwrapGatewayCall,
+} from "#src/access-intent/tool-input-path";
 import type { PathNormalizer } from "#src/path-normalizer";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import { SessionApproval } from "#src/session-approval";
@@ -15,6 +18,10 @@ import type { ToolCallContext } from "./types";
  * no extractable path, the `path` surface evaluates to `allow`, or no
  * explicit `path` rule matched — i.e. only the universal default fired).
  * Returns a `GateDescriptor` when the path matches a `deny` or `ask` rule.
+ *
+ * Gateway `mcp` calls are gated and reported under their effective inner
+ * tool (see {@link unwrapGatewayCall}) so deny/ask prompts name the real
+ * target instead of the wrapper.
  */
 export function describePathGate(
   tcc: ToolCallContext,
@@ -22,13 +29,18 @@ export function describePathGate(
   normalizer: PathNormalizer,
   extractors?: ToolAccessExtractorLookup,
 ): GateResult {
-  const filePath = getToolInputPath(tcc.toolName, tcc.input, extractors);
+  const effective = unwrapGatewayCall(tcc.toolName, tcc.input);
+  if (!effective) return null; // string args failed JSON.parse — dispatch throws
+  const { toolName: effToolName, input: effInput } = effective;
+  const filePath = getToolInputPath(effToolName, effInput, extractors);
   if (!filePath) return null;
 
   // Emit an access-path intent so the resolver matches the lexical aliases
   // *and* the canonical (symlink-resolved) form, the same set
   // `external_directory` matches (#418, #486).
   const accessPath = normalizer.forPath(filePath);
+  // Report the effective (inner) tool name — prompts and logs must name the
+  // tool that will actually touch the path.
   const check = resolver.resolve({
     kind: "access-path",
     surface: "path",
@@ -52,7 +64,7 @@ export function describePathGate(
     input: { path: filePath },
     denialContext: {
       kind: "path",
-      toolName: tcc.toolName,
+      toolName: effToolName,
       pathValue: filePath,
       agentName: tcc.agentName ?? undefined,
     },
@@ -61,19 +73,19 @@ export function describePathGate(
       source: "tool_call",
       agentName: tcc.agentName,
       message: formatPathAskPrompt(
-        tcc.toolName,
+        effToolName,
         filePath,
         tcc.agentName ?? undefined,
       ),
       toolCallId: tcc.toolCallId,
-      toolName: tcc.toolName,
+      toolName: effToolName,
       path: filePath,
       accessIntent: accessFactsFromPath("path", accessPath),
     },
     logContext: {
       source: "tool_call",
       toolCallId: tcc.toolCallId,
-      toolName: tcc.toolName,
+      toolName: effToolName,
       agentName: tcc.agentName,
       path: filePath,
     },

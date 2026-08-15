@@ -1,10 +1,13 @@
-import { getToolInputPath } from "#src/access-intent/tool-input-path";
-import { classifyToolKind } from "#src/access-intent/tool-kind";
+import {
+  getToolInputPath,
+  unwrapGatewayCall,
+} from "#src/access-intent/tool-input-path";
 import type { PathNormalizer } from "#src/path-normalizer";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import { SessionApproval } from "#src/session-approval";
 import { deriveApprovalPattern } from "#src/session-rules";
 import type { ToolAccessExtractorLookup } from "#src/tool-access-extractor-registry";
+import { getNonEmptyString } from "#src/value-guards";
 import type { GateResult } from "./descriptor";
 import { accessFactsFromPath, accessFactsFromValue } from "./helpers";
 import type { ToolCallContext } from "./types";
@@ -32,15 +35,11 @@ const SERENA_WRITE_TOOLS: ReadonlySet<string> = new Set([
  * (single-file) scope is statically checkable.
  */
 function replaceInFilesScope(record: Record<string, unknown>): string | null {
-  const rel = getString(record.relative_path);
+  const rel = getNonEmptyString(record.relative_path);
   if (rel) return rel;
-  const glob = getString(record.paths_include_glob);
+  const glob = getNonEmptyString(record.paths_include_glob);
   if (glob && !/[?*[\]{}]/.test(glob)) return glob;
   return null; // whole project or wildcard — conservative ask below
-}
-
-function getString(v: unknown): string | null {
-  return typeof v === "string" && v.length > 0 ? v : null;
 }
 
 /**
@@ -58,18 +57,12 @@ export function describeToolPathWriteGate(
   // pi routes MCP servers through the single gateway tool `mcp`, called as
   // mcp({ tool: "serena_...", args: {...} }) — the real target rides in
   // input.tool/input.args. Match SERENA_WRITE_TOOLS and extract the path
-  // against that effective pair; matching the wrapper name ("mcp") would let
-  // every serena write bypass this surface entirely.
-  const wrapper = (tcc.input ?? {}) as Record<string, unknown>;
-  let effToolName = tcc.toolName;
-  let effInput: unknown = wrapper;
-  if (classifyToolKind(tcc.toolName) === "mcp") {
-    const innerTool = getString(wrapper.tool);
-    if (innerTool) {
-      effToolName = innerTool;
-      effInput = wrapper.args ?? {};
-    }
-  }
+  // against unwrapGatewayCall's effective pair (dash-normalized name, parsed
+  // args); matching the wrapper name ("mcp") would let every serena write
+  // bypass this surface entirely.
+  const effective = unwrapGatewayCall(tcc.toolName, tcc.input);
+  if (!effective) return null; // string args failed JSON.parse — dispatch throws
+  const { toolName: effToolName, input: effInput } = effective;
 
   if (!SERENA_WRITE_TOOLS.has(effToolName)) return null;
 

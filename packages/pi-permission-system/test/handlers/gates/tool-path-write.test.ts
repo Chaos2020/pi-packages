@@ -211,6 +211,76 @@ describe("describeToolPathWriteGate — mcp gateway shape", () => {
     expect(result.decision.value).toBe("<wildcard-scope>");
   });
 
+  it("asks when a dashed inner tool name (serena-create-text-file) writes AGENTS.md through the gateway", () => {
+    // The gateway dispatch normalizes dashed names to underscores before
+    // matching the registered tool, so the gate must normalize the same way
+    // or the write silently misses SERENA_WRITE_TOOLS.
+    const resolver = makeResolver(
+      makeCheckResult({ state: "ask", matchedPattern: "*AGENTS.md" }),
+    );
+    const result = describeToolPathWriteGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena-create-text-file",
+          args: { relative_path: "AGENTS.md", content: "x" },
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    if (!isGateDescriptor(result)) throw new Error("expected descriptor");
+    expect(result.surface).toBe("path_write");
+    expect(result.decision.value).toBe("AGENTS.md");
+    if (result.denialContext.kind !== "tool_path_write") {
+      throw new Error("expected tool_path_write denial context");
+    }
+    expect(result.denialContext.toolName).toBe("serena_create_text_file");
+  });
+
+  it("gates a gateway write whose args ride as a JSON string", () => {
+    // The gateway accepts args as a JSON string; the gate must parse it to
+    // the real target instead of degrading to the conservative wildcard ask.
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*AGENTS.md" }),
+    );
+    const result = describeToolPathWriteGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena_create_text_file",
+          args: '{"relative_path":"AGENTS.md","content":"x"}',
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    if (!isGateDescriptor(result)) throw new Error("expected descriptor");
+    expect(result.surface).toBe("path_write");
+    expect(result.decision.value).toBe("AGENTS.md");
+    expect(result.preCheck?.state).toBe("deny");
+  });
+
+  it("returns null for a gateway write whose string args fail JSON.parse", () => {
+    // The gateway dispatch throws before the inner call executes.
+    const resolver = makeResolver();
+    const result = describeToolPathWriteGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena_create_text_file",
+          args: "{oops",
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(result).toBeNull();
+    expect(resolver.resolve).not.toHaveBeenCalled();
+  });
+
   it("returns null for a non-write serena tool through the gateway", () => {
     const resolver = makeResolver();
     const result = describeToolPathWriteGate(

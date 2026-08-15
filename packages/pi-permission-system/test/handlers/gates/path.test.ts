@@ -410,6 +410,66 @@ describe("describePathGate — extension and MCP tools (#352)", () => {
     });
   });
 
+  it("reports the effective inner tool name in the gateway descriptor", () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc({
+        toolName: "mcp",
+        input: { tool: "serena_read_file", args: { relative_path: ".env" } },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    if (!isGateDescriptor(result)) throw new Error("expected descriptor");
+    if (result.denialContext.kind !== "path") {
+      throw new Error("expected path denial context");
+    }
+    expect(result.denialContext.toolName).toBe("serena_read_file");
+    expect(result.promptDetails.toolName).toBe("serena_read_file");
+  });
+
+  it("denies a gateway read whose args ride as a JSON string targeting .env", () => {
+    // The gateway accepts args as a JSON string; the gate must parse it or
+    // the read path deny (*.env) is bypassed while the dispatch still reads.
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena_read_file",
+          args: '{"relative_path":".env"}',
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    if (!isGateDescriptor(result)) throw new Error("expected descriptor");
+    expect(result.surface).toBe("path");
+    expect(result.preCheck?.state).toBe("deny");
+    expect(result.decision.value).toContain(".env");
+  });
+
+  it("returns null for a gateway read whose string args fail JSON.parse", () => {
+    // The gateway dispatch throws before the inner call executes.
+    const resolver = makeResolver();
+    const result = describePathGate(
+      makeTcc({
+        toolName: "mcp",
+        input: { tool: "serena_read_file", args: "{oops" },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(result).toBeNull();
+    expect(resolver.resolve).not.toHaveBeenCalled();
+  });
+
   it("returns null for a gateway read of an allowed path", () => {
     const resolver = makeResolver(makeCheckResult({ state: "allow" }));
     const result = describePathGate(
