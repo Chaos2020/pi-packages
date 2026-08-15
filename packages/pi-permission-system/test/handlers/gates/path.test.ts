@@ -359,6 +359,30 @@ describe("describePathGate — extension and MCP tools (#352)", () => {
     });
   });
 
+  it("gates a serena read tool via relative_path", () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc({
+        toolName: "serena_read_file",
+        input: { relative_path: ".env" },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    expect(resolver.resolve).toHaveBeenCalledWith({
+      kind: "access-path",
+      surface: "path",
+      path: AccessPath.forPath(".env", {
+        cwd: "/test/project",
+        flavor: posixPathFlavor,
+      }),
+      agentName: undefined,
+    });
+  });
+
   it("uses a registered extractor's path for a custom-shaped tool", () => {
     const resolver = makeResolver(
       makeCheckResult({ state: "deny", matchedPattern: "*" }),
