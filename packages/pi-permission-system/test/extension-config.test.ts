@@ -99,7 +99,7 @@ describe("normalizePermissionSystemConfig", () => {
       yoloMode: true,
       doublePressToConfirm: true,
       wrapperAllowlist: [],
-      askTimeoutMs: 3000,
+      askTimeoutMs: 10000,
     });
   });
 
@@ -189,9 +189,9 @@ describe("normalizePermissionSystemConfig", () => {
     expect(result.authorizerChain).toEqual(["model-judge", "typo-reviewer"]);
   });
 
-  it("defaults askTimeoutMs to 3000 and wrapperAllowlist to empty", () => {
+  it("defaults askTimeoutMs to 10000 and wrapperAllowlist to empty", () => {
     const result = normalizePermissionSystemConfig({});
-    expect(result.askTimeoutMs).toBe(3000);
+    expect(result.askTimeoutMs).toBe(10000);
     expect(result.wrapperAllowlist).toEqual([]);
   });
 
@@ -204,14 +204,14 @@ describe("normalizePermissionSystemConfig", () => {
     // Clamping a negative value to 0 would silently *disable* the timeout —
     // the opposite of what the misconfigured intent needs.
     const result = normalizePermissionSystemConfig({ askTimeoutMs: -5 });
-    expect(result.askTimeoutMs).toBe(3000);
+    expect(result.askTimeoutMs).toBe(10000);
   });
 
   it("falls back to the default for a non-finite askTimeoutMs (m3)", () => {
     const result = normalizePermissionSystemConfig({
       askTimeoutMs: Number.POSITIVE_INFINITY,
     });
-    expect(result.askTimeoutMs).toBe(3000);
+    expect(result.askTimeoutMs).toBe(10000);
   });
 
   it("truncates a fractional askTimeoutMs (m3)", () => {

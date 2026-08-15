@@ -141,6 +141,29 @@ describe("LocalUserAuthorizer", () => {
     );
   });
 
+  it("prefers the per-ask askTimeoutMs override over the session preference", async () => {
+    const { deps, ui, decisionFn } = makeDeps();
+    // Session preference says 10s; the per-ask override says 0 (wait
+    // indefinitely). The override must win — otherwise a timeout-retry ask
+    // would time out again and the task would fail by silence twice.
+    const authorizer = new LocalUserAuthorizer({
+      ...deps,
+      getPromptPreferences: () => ({
+        doublePressToConfirm: true,
+        askTimeoutMs: 10000,
+      }),
+    });
+
+    await authorizer.authorize(makeDetails({ askTimeoutMs: 0 }));
+
+    expect(decisionFn).toHaveBeenCalledWith(
+      { mode: "tui", ui, doublePressToConfirm: true, askTimeoutMs: 0 },
+      "Permission Required",
+      "Allow read?",
+      undefined,
+    );
+  });
+
   it("emits the UI event before calling requestPermissionDecision", async () => {
     const calls: string[] = [];
     const events = {

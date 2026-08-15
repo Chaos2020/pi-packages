@@ -242,10 +242,10 @@ export const unifiedConfigSchema = z
     }),
     askTimeoutMs: z.number().int().min(0).optional().meta({
       description:
-        "Auto-deny an unanswered permission ask after this many milliseconds. 0 disables the timeout (the prompt waits indefinitely). Defaults to 3000.",
+        "Auto-deny an unanswered permission ask after this many milliseconds. 0 disables the timeout (the prompt waits indefinitely). Defaults to 10000.",
       markdownDescription:
-        "Auto-deny an unanswered permission ask (prompt dialog) after this many milliseconds — the ask settles as a **timeout denial** rather than hanging or silently allowing. `0` disables the timeout (the prompt waits indefinitely for the user). Defaults to `3000`.",
-      default: 3000,
+        "Auto-deny an unanswered permission ask (prompt dialog) after this many milliseconds — the ask settles as a **timeout denial** rather than hanging or silently allowing. `0` disables the timeout (the prompt waits indefinitely for the user). Defaults to `10000`.",
+      default: 10000,
     }),
     permission: permissionSchema.optional(),
     shellTools: shellToolsSchema.optional(),

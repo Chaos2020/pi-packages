@@ -196,6 +196,100 @@ describe("AuthorizerSelection", () => {
     });
   });
 
+  describe("timeout-retry escalation", () => {
+    /** Details for a bash ask with a stable operation key. */
+    function makeBashDetails(command: string): PromptPermissionDetails {
+      return {
+        ...makeDetails(),
+        toolName: "bash",
+        command,
+      };
+    }
+
+    function makeTimedOut(): PermissionPromptDecision {
+      return {
+        approved: false,
+        state: "denied",
+        denialReason: "permission ask timed out — denied by default",
+        timedOut: true,
+        confirmationUnavailable: true,
+      };
+    }
+
+    it("asks without timeout when the same operation previously timed out", async () => {
+      const prompter = makePrompterApi();
+      prompter.prompt
+        .mockResolvedValueOnce(makeTimedOut())
+        .mockResolvedValue({ approved: true, state: "approved" });
+      const selection = new AuthorizerSelection(makeDeps({ prompter }));
+      selection.activate(makeCtx({ hasUI: true }));
+      const details = makeBashDetails("git push");
+
+      await selection.escalate(details);
+      const retry = await selection.escalate(details);
+
+      // First ask: no override (session preference applies).
+      expect(prompter.prompt.mock.calls[0][1]).toEqual(details);
+      // Follow-up ask for the same operation: wait indefinitely.
+      expect(prompter.prompt.mock.calls[1][1]).toEqual({
+        ...details,
+        askTimeoutMs: 0,
+      });
+      expect(retry.approved).toBe(true);
+    });
+
+    it("does not apply the timeout override to a different operation", async () => {
+      const prompter = makePrompterApi();
+      prompter.prompt
+        .mockResolvedValueOnce(makeTimedOut())
+        .mockResolvedValue({ approved: true, state: "approved" });
+      const selection = new AuthorizerSelection(makeDeps({ prompter }));
+      selection.activate(makeCtx({ hasUI: true }));
+
+      await selection.escalate(makeBashDetails("git push"));
+      await selection.escalate(makeBashDetails("git pull"));
+
+      // The follow-up is a different operation: no override.
+      expect(prompter.prompt.mock.calls[1][1]).toEqual(
+        makeBashDetails("git pull"),
+      );
+    });
+
+    it("clears the timeout memory once a human answers", async () => {
+      const prompter = makePrompterApi();
+      prompter.prompt
+        .mockResolvedValueOnce(makeTimedOut())
+        .mockResolvedValueOnce({ approved: true, state: "approved" })
+        .mockResolvedValue({ approved: true, state: "approved" });
+      const selection = new AuthorizerSelection(makeDeps({ prompter }));
+      selection.activate(makeCtx({ hasUI: true }));
+      const details = makeBashDetails("git push");
+
+      await selection.escalate(details); // times out → remembered
+      await selection.escalate(details); // retry → no timeout, human approves
+      await selection.escalate(details); // fresh ask again → normal timeout
+
+      expect(prompter.prompt.mock.calls[2][1]).toEqual(details);
+    });
+
+    it("resets the timeout memory on deactivate", async () => {
+      const prompter = makePrompterApi();
+      prompter.prompt
+        .mockResolvedValueOnce(makeTimedOut())
+        .mockResolvedValue({ approved: true, state: "approved" });
+      const selection = new AuthorizerSelection(makeDeps({ prompter }));
+      selection.activate(makeCtx({ hasUI: true }));
+      const details = makeBashDetails("git push");
+
+      await selection.escalate(details); // times out → remembered
+      selection.deactivate();
+      selection.activate(makeCtx({ hasUI: true }));
+      await selection.escalate(details); // new session → normal timeout
+
+      expect(prompter.prompt.mock.calls[1][1]).toEqual(details);
+    });
+  });
+
   describe("lifecycle", () => {
     it("activate then deactivate rejects a subsequent escalate", async () => {
       const selection = new AuthorizerSelection(makeDeps());

@@ -55,7 +55,8 @@ export class LocalUserAuthorizer implements TerminalAuthorizer {
         ui: this.deps.ui,
         doublePressToConfirm:
           this.deps.getPromptPreferences().doublePressToConfirm,
-        askTimeoutMs: this.deps.getPromptPreferences().askTimeoutMs,
+        askTimeoutMs:
+          details.askTimeoutMs ?? this.deps.getPromptPreferences().askTimeoutMs,
       },
       details.forwarding
         ? "Permission Required (Subagent)"

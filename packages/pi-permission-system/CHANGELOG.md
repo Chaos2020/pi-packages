@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+* **ask timeout-retry escalation**: when an `ask` times out (`ask_timeout`) and the agent re-requests the same operation — meaning no better no-auth alternative exists — the follow-up ask waits indefinitely for a human decision instead of timing out again. The escalation resets once the human answers. (smart-permissions fork)
+
 ## [25.1.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v25.0.0...pi-permission-system-v25.1.0) (2026-08-13)
 
 

@@ -56,6 +56,18 @@ export class AuthorizerSelection
 {
   private terminal: TerminalAuthorizer | null = null;
 
+  /**
+   * Operation keys whose previous ask timed out (resolution `ask_timeout`).
+   *
+   * When an ask times out, the agent receives a denial and looks for a
+   * no-auth alternative; if none exists it re-requests the same operation,
+   * which lands here again. For that follow-up ask the timeout is disabled
+   * (`askTimeoutMs: 0` — wait indefinitely), so a task that genuinely needs
+   * human permission cannot fail twice by silence. The entry is removed once
+   * the human actually answers, restoring the normal timeout for later asks.
+   */
+  private timedOutOps = new Set<string>();
+
   constructor(
     private readonly deps: AuthorizerSelectionDeps & {
       prompter: PermissionPrompterApi;
@@ -98,9 +110,10 @@ export class AuthorizerSelection
     return links;
   }
 
-  /** Clear the stored selection. */
+  /** Clear the stored selection and the timeout-retry memory. */
   deactivate(): void {
     this.terminal = null;
+    this.timedOutOps.clear();
   }
 
   /**
@@ -111,10 +124,16 @@ export class AuthorizerSelection
    * terminal. With zero links the composed value **is** the terminal instance,
    * so behavior is identical to a bare terminal escalation.
    *
+   * Timeout-retry escalation: if the same operation previously timed out (the
+   * agent re-requested it because no better no-auth alternative exists), the
+   * follow-up ask waits indefinitely (`askTimeoutMs: 0`) instead of timing out
+   * again; once the human answers, the entry is cleared and normal timeout
+   * behavior resumes.
+   *
    * Rejects if no terminal has been selected — i.e. before the session was
    * activated. Implements {@link AskEscalator}.
    */
-  escalate(
+  async escalate(
     details: PromptPermissionDetails,
   ): Promise<PermissionPromptDecision> {
     if (this.terminal === null) {
@@ -122,12 +141,47 @@ export class AuthorizerSelection
         new Error("escalate called before the session was activated"),
       );
     }
+    const opKey = operationKeyOf(details);
+    const retryingTimedOutOp = opKey !== null && this.timedOutOps.has(opKey);
     const chain = composeAuthorizerChain(
       this.resolveConfiguredLinks(),
       this.terminal,
       this.deps.getPermissionQuery(),
       this.deps.logger,
     );
-    return this.deps.prompter.prompt(chain, details);
+    const decision = await this.deps.prompter.prompt(
+      chain,
+      retryingTimedOutOp ? { ...details, askTimeoutMs: 0 } : details,
+    );
+    if (opKey !== null) {
+      if (decision.timedOut) {
+        // First (or another) silence: remember the operation so the next ask
+        // for it waits indefinitely — a task that needs permission must not
+        // fail twice by silence.
+        this.timedOutOps.add(opKey);
+      } else {
+        // A human (or a chain link) actually ruled: restore normal timeout.
+        this.timedOutOps.delete(opKey);
+      }
+    }
+    return decision;
   }
+}
+
+/**
+ * Normalize an ask into a stable operation key for timeout-retry tracking.
+ *
+ * Two asks for the same operation (same tool surface + same command/path/
+ * target) share a key, so an agent retrying after a timeout is recognized as
+ * the same task. Returns `null` when no stable payload exists (the ask is not
+ * tracked).
+ */
+function operationKeyOf(details: PromptPermissionDetails): string | null {
+  const surface = details.toolName ?? details.surface ?? "";
+  const payload =
+    details.command ?? details.path ?? details.target ?? details.value ?? "";
+  if (surface === "" && payload === "") {
+    return null;
+  }
+  return `${surface}\u0000${payload}`;
 }
