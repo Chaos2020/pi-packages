@@ -383,6 +383,49 @@ describe("describePathGate — extension and MCP tools (#352)", () => {
     });
   });
 
+  it("gates a serena read tool via the gateway {tool,args} shape", () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc({
+        toolName: "mcp",
+        input: { tool: "serena_read_file", args: { relative_path: ".env" } },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    if (!isGateDescriptor(result)) throw new Error("expected descriptor");
+    expect(result.surface).toBe("path");
+    expect(result.preCheck?.state).toBe("deny");
+    expect(resolver.resolve).toHaveBeenCalledWith({
+      kind: "access-path",
+      surface: "path",
+      path: AccessPath.forPath(".env", {
+        cwd: "/test/project",
+        flavor: posixPathFlavor,
+      }),
+      agentName: undefined,
+    });
+  });
+
+  it("returns null for a gateway read of an allowed path", () => {
+    const resolver = makeResolver(makeCheckResult({ state: "allow" }));
+    const result = describePathGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena_read_file",
+          args: { relative_path: "src/a.ts" },
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(result).toBeNull();
+  });
+
   it("uses a registered extractor's path for a custom-shaped tool", () => {
     const resolver = makeResolver(
       makeCheckResult({ state: "deny", matchedPattern: "*" }),

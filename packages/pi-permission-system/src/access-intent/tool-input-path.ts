@@ -22,7 +22,8 @@ export function getPathBearingToolPath(
  *
  * - `bash` → `null` (bash has its own token-based path gates).
  * - Built-in path-bearing tools → `input.path`.
- * - `mcp` → `input.arguments.path`.
+ * - `mcp` (stdio shape) → `input.arguments.path`.
+ * - `mcp` (gateway shape `{tool, args}`) → the unwrapped inner tool's path.
  * - Any other tool → a registered {@link ToolAccessExtractor}'s path, else the
  *   default `input.path` convention.
  */
@@ -38,8 +39,18 @@ export function getToolInputPath(
       return null;
     case "path":
       return getNonEmptyString(record.path);
-    case "mcp":
+    case "mcp": {
+      // Gateway shape: pi routes every MCP server through the single built-in
+      // `mcp` tool, called as mcp({ tool: "serena_read_file", args: {...} }).
+      // Unwrap once and re-classify the inner tool so gateway-routed calls are
+      // path-gated by their real target; a nested "mcp" name is not recursed
+      // into (fall through to the stdio `arguments.path` shape instead).
+      const innerTool = getNonEmptyString(record.tool);
+      if (innerTool && classifyToolKind(innerTool) !== "mcp") {
+        return getToolInputPath(innerTool, record.args, extractors);
+      }
       return getNonEmptyString(toRecord(record.arguments).path);
+    }
     case "skill":
     case "extension": {
       const custom = extractors?.get(toolName);

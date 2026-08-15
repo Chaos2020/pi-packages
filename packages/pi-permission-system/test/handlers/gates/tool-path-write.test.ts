@@ -148,3 +148,83 @@ describe("describeToolPathWriteGate", () => {
     expect(result.surface).toBe("path_write");
   });
 });
+
+// pi exposes MCP servers through the single gateway tool `mcp`, called as
+// mcp({ tool: "serena_...", args: {...} }) — serena write tools must still
+// hit the path_write surface through that wrapper.
+describe("describeToolPathWriteGate — mcp gateway shape", () => {
+  it("asks when serena_create_text_file writes AGENTS.md through the gateway", () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "ask", matchedPattern: "*AGENTS.md" }),
+    );
+    const result = describeToolPathWriteGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena_create_text_file",
+          args: { relative_path: "AGENTS.md", content: "x" },
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    if (!isGateDescriptor(result)) throw new Error("expected descriptor");
+    expect(result.surface).toBe("path_write");
+    expect(result.preCheck?.state).toBe("ask");
+  });
+
+  it("allows an ordinary file write through the gateway", () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "allow", matchedPattern: undefined }),
+    );
+    const result = describeToolPathWriteGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena_create_text_file",
+          args: { relative_path: "src/main.ts", content: "x" },
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("conservatively asks for a wildcard replace_in_files scope through the gateway", () => {
+    const resolver = makeResolver();
+    const result = describeToolPathWriteGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena_replace_in_files",
+          args: { needle: "x", repl: "y", paths_include_glob: "src/**/*.ts" },
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    if (!isGateDescriptor(result)) throw new Error("expected descriptor");
+    expect(result.surface).toBe("path_write");
+    expect(result.decision.value).toBe("<wildcard-scope>");
+  });
+
+  it("returns null for a non-write serena tool through the gateway", () => {
+    const resolver = makeResolver();
+    const result = describeToolPathWriteGate(
+      makeTcc({
+        toolName: "mcp",
+        input: {
+          tool: "serena_get_symbols_overview",
+          args: { relative_path: "src/main.ts" },
+        },
+      }),
+      resolver,
+      normalizer,
+    );
+    expect(result).toBeNull();
+    expect(resolver.resolve).not.toHaveBeenCalled();
+  });
+});

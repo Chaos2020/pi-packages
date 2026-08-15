@@ -1,4 +1,5 @@
 import { getToolInputPath } from "#src/access-intent/tool-input-path";
+import { classifyToolKind } from "#src/access-intent/tool-kind";
 import type { PathNormalizer } from "#src/path-normalizer";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import { SessionApproval } from "#src/session-approval";
@@ -54,14 +55,30 @@ export function describeToolPathWriteGate(
   normalizer: PathNormalizer,
   extractors?: ToolAccessExtractorLookup,
 ): GateResult {
-  if (!SERENA_WRITE_TOOLS.has(tcc.toolName)) return null;
+  // pi routes MCP servers through the single gateway tool `mcp`, called as
+  // mcp({ tool: "serena_...", args: {...} }) — the real target rides in
+  // input.tool/input.args. Match SERENA_WRITE_TOOLS and extract the path
+  // against that effective pair; matching the wrapper name ("mcp") would let
+  // every serena write bypass this surface entirely.
+  const wrapper = (tcc.input ?? {}) as Record<string, unknown>;
+  let effToolName = tcc.toolName;
+  let effInput: unknown = wrapper;
+  if (classifyToolKind(tcc.toolName) === "mcp") {
+    const innerTool = getString(wrapper.tool);
+    if (innerTool) {
+      effToolName = innerTool;
+      effInput = wrapper.args ?? {};
+    }
+  }
 
-  const record = (tcc.input ?? {}) as Record<string, unknown>;
+  if (!SERENA_WRITE_TOOLS.has(effToolName)) return null;
+
+  const record = (effInput ?? {}) as Record<string, unknown>;
   let filePath: string | null;
-  if (tcc.toolName === "serena_replace_in_files") {
+  if (effToolName === "serena_replace_in_files") {
     filePath = replaceInFilesScope(record);
   } else {
-    filePath = getToolInputPath(tcc.toolName, tcc.input, extractors);
+    filePath = getToolInputPath(effToolName, effInput, extractors);
   }
 
   // A wildcard/whole-project write scope cannot be statically proven safe —
@@ -72,7 +89,7 @@ export function describeToolPathWriteGate(
       input: { path: undefined },
       denialContext: {
         kind: "tool_path_write",
-        toolName: tcc.toolName,
+        toolName: effToolName,
         pathValue: undefined,
         agentName: tcc.agentName ?? undefined,
       },
@@ -83,13 +100,13 @@ export function describeToolPathWriteGate(
         message:
           "This serena write tool's scope (whole project or wildcard) cannot be statically checked against key-file rules.",
         toolCallId: tcc.toolCallId,
-        toolName: tcc.toolName,
+        toolName: effToolName,
         accessIntent: accessFactsFromValue("path_write", "<wildcard-scope>"),
       },
       logContext: {
         source: "tool_call",
         toolCallId: tcc.toolCallId,
-        toolName: tcc.toolName,
+        toolName: effToolName,
         agentName: tcc.agentName,
       },
       decision: { surface: "path_write", value: "<wildcard-scope>" },
@@ -113,7 +130,7 @@ export function describeToolPathWriteGate(
     input: { path: filePath },
     denialContext: {
       kind: "tool_path_write",
-      toolName: tcc.toolName,
+      toolName: effToolName,
       pathValue: filePath,
       agentName: tcc.agentName ?? undefined,
     },
@@ -121,15 +138,15 @@ export function describeToolPathWriteGate(
     promptDetails: {
       source: "tool_call",
       agentName: tcc.agentName,
-      message: `${tcc.toolName} writes a file that is protected by the path_write policy.`,
+      message: `${effToolName} writes a file that is protected by the path_write policy.`,
       toolCallId: tcc.toolCallId,
-      toolName: tcc.toolName,
+      toolName: effToolName,
       accessIntent: accessFactsFromPath("path_write", accessPath),
     },
     logContext: {
       source: "tool_call",
       toolCallId: tcc.toolCallId,
-      toolName: tcc.toolName,
+      toolName: effToolName,
       agentName: tcc.agentName,
       path: filePath,
     },
