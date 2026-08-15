@@ -1130,5 +1130,40 @@ describe("resolveBashCommandCheck", () => {
       );
       expect(result.state).toBe("allow");
     });
+
+    it("B4: printenv 2>&1 | head — fd-merge redirect does not dodge the dump floor", () => {
+      const resolver = makeResolver(bashResult("allow", "printenv", "*"));
+      const result = resolveBashCommandCheck(
+        "printenv 2>&1 | head",
+        [{ text: "printenv 2>&1" }, { text: "head" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B4: /usr/bin/printenv (path-qualified) is still a bare dump → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "printenv", "*"));
+      const result = resolveBashCommandCheck(
+        "/usr/bin/printenv",
+        [{ text: "/usr/bin/printenv" }],
+        undefined,
+        resolver,
+      );
+      expect(result.state).toBe("deny");
+    });
+
+    it("B4: command printenv / exec printenv are bare dumps → deny", () => {
+      const resolver = makeResolver(bashResult("allow", "printenv", "*"));
+      for (const t of ["command printenv", "exec printenv"]) {
+        const result = resolveBashCommandCheck(
+          t,
+          [{ text: t }],
+          undefined,
+          resolver,
+        );
+        expect(result.state).toBe("deny");
+      }
+    });
   });
 });

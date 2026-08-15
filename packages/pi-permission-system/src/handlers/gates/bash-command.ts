@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type {
   BashCommand,
   WrapperKind,
@@ -397,11 +398,19 @@ export function resolveBashCommandCheck(
    * entry says otherwise. `printenv VAR` (single variable) is ordinary.
    */
   function isBarePrintenvUnit(cmd: BashCommand): boolean {
-    const parts = cmd.text
+    // Robust to shapes that dodge a naive one-token check (round-4 review):
+    // fd-merge redirects (`printenv 2>&1`), a path-qualified binary
+    // (`/usr/bin/printenv`), and `command`/`exec` prefixes (`command
+    // printenv`) all still dump the whole environment.
+    const tokens = cmd.text
       .trim()
       .split(/\s+/)
-      .filter((t) => t.length > 0);
-    return parts.length === 1 && parts[0] === "printenv";
+      .filter((t) => t.length > 0 && !/^\d*>&\d*$/.test(t));
+    if (tokens.length === 0) return false;
+    let i = 0;
+    if (tokens[0] === "command" || tokens[0] === "exec") i++;
+    const name = basename(tokens[i] ?? "");
+    return name === "printenv" && tokens.length - i === 1;
   }
 
   const results = commands.map((cmd) => {
