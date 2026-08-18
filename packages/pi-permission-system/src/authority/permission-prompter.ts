@@ -30,6 +30,12 @@ export interface PromptPermissionDetails {
   toolCallId?: string;
   toolName?: string;
   skillName?: string;
+  /**
+   * The path a path-bearing tool touches (lexical absolute form). Feeds
+   * judge-side consumers — e.g. `command-safety-judge` matches it against
+   * `manualConfirmGlobs` to force a human decision on config-class files.
+   * Absent for non-path surfaces (bash command, MCP target).
+   */
   path?: string;
   command?: string;
   target?: string;

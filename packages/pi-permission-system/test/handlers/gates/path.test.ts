@@ -205,6 +205,20 @@ describe("describePathGate", () => {
     });
   });
 
+  it("carries the raw file path on promptDetails so judge-side manualConfirmGlobs can match", () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "ask", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc(),
+      resolver,
+      normalizer,
+    ) as GateDescriptor;
+    // Regression guard: the path gate already forwards `path`; keep it that
+    // way so the command-safety-judge's manualConfirmGlobs keep firing.
+    expect(result.promptDetails.path).toBe(".env");
+  });
+
   it("descriptor decision uses surface 'path' and the file path as value", () => {
     const resolver = makeResolver(
       makeCheckResult({ state: "deny", matchedPattern: "*.env" }),

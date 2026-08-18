@@ -9,6 +9,17 @@ import type {
   ModelRegistryLike,
 } from "#src/authority/command-safety-review";
 import type { PromptPermissionDetails } from "#src/authority/permission-prompter";
+import { describeToolGate } from "#src/handlers/gates/tool";
+import type { ToolCallContext } from "#src/handlers/gates/types";
+import { posixPathFlavor } from "#src/path/path-flavor";
+import { PathNormalizer } from "#src/path-normalizer";
+import {
+  TOOL_INPUT_LOG_PREVIEW_MAX_LENGTH,
+  TOOL_INPUT_PREVIEW_MAX_LENGTH,
+  TOOL_TEXT_SUMMARY_MAX_LENGTH,
+} from "#src/tool-input-preview";
+import { ToolPreviewFormatter } from "#src/tool-preview-formatter";
+import type { PermissionCheckResult } from "#src/types";
 
 // command-safety-judge: allow-capable LLM authorizer (deny/suggest/allow/defer).
 
@@ -91,6 +102,66 @@ describe("command-safety-judge authorizer", () => {
     );
     expect(result.kind).toBe("defer");
     expect(called).toBe(false);
+  });
+
+  test("edit-tool ask from describeToolGate carries its path: manualConfirmGlobs hit → defer, LLM never called", async () => {
+    // Regression (#manual-confirm-path): the tool gate builds the ask's
+    // promptDetails; the judge matches manualConfirmGlobs against
+    // details.path. Before the fix, describeToolGate never set `path`, so an
+    // edit on a whitelisted config path fell through to the LLM (and its
+    // noise-averse auto-approve) instead of deferring to the human.
+    const formatter = new ToolPreviewFormatter({
+      toolInputPreviewMaxLength: TOOL_INPUT_PREVIEW_MAX_LENGTH,
+      toolTextSummaryMaxLength: TOOL_TEXT_SUMMARY_MAX_LENGTH,
+      toolInputLogPreviewMaxLength: TOOL_INPUT_LOG_PREVIEW_MAX_LENGTH,
+    });
+    const tcc: ToolCallContext = {
+      toolName: "edit",
+      agentName: null,
+      input: { path: "/home/lxx/.pi/agent/AGENTS.md" },
+      toolCallId: "tc-edit-1",
+      cwd: "/test/project",
+    };
+    const check: PermissionCheckResult = {
+      state: "ask",
+      toolName: "edit",
+      source: "tool",
+      origin: "builtin",
+      matchedPattern: "*",
+    };
+    const normalizer = new PathNormalizer(posixPathFlavor, "/test/project");
+    const accessPath = normalizer.forPath("/home/lxx/.pi/agent/AGENTS.md");
+    const desc = describeToolGate(tcc, check, formatter, accessPath);
+
+    let called = false;
+    const complete = (async () => {
+      called = true;
+      return { content: [] };
+    }) as unknown as CompleteSimpleFn;
+    const judge = createCommandSafetyJudge({
+      getConfig: () =>
+        makeConfig({ manualConfirmGlobs: ["/home/lxx/.pi/agent/AGENTS.md"] }),
+      getRegistry: () => makeRegistry(),
+      completeSimple: complete,
+      getCwd: () => "/test/project",
+    });
+    const log = makeLog();
+    const verdict = await judge(
+      { ...desc.promptDetails, requestId: "req-gate-1" } as PromptPermissionDetails,
+      {} as never,
+      log,
+    );
+    expect(verdict.kind).toBe("defer");
+    expect(called).toBe(false);
+    expect(
+      log.entries.some(
+        (e) =>
+          (e as unknown[])[1] === "command_safety_judge.decision" &&
+          (
+            (e as unknown[])[2] as { deferReason?: string }
+          ).deferReason === "manual-confirm-path",
+      ),
+    ).toBe(true);
   });
 
   test("defers when no config (inert / opt-in)", async () => {

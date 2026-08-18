@@ -284,6 +284,34 @@ describe("describeToolGate", () => {
     });
   });
 
+  it("carries the lexical path on promptDetails so judge-side manualConfirmGlobs can match", () => {
+    // Regression (#manual-confirm-path): the command-safety-judge matches
+    // `manualConfirmGlobs` against `details.path`; without the lexical path
+    // here, an edit/write ask reaches the judge with `path: undefined` and the
+    // manual-confirm whitelist never fires.
+    const check = makeCheckResult("ask", { toolName: "edit" });
+    const accessPath = normalizer.forPath("/home/lxx/.pi/agent/AGENTS.md");
+    const desc = describeToolGate(
+      makeTcc({
+        toolName: "edit",
+        input: { path: "/home/lxx/.pi/agent/AGENTS.md" },
+      }),
+      check,
+      makeFormatter(),
+      accessPath,
+    );
+    expect(desc.promptDetails.path).toBe("/home/lxx/.pi/agent/AGENTS.md");
+  });
+
+  it("omits promptDetails.path when no AccessPath is available", () => {
+    const desc = describeToolGate(
+      makeTcc({ toolName: "read", input: {} }),
+      makeCheckResult("ask"),
+      makeFormatter(),
+    );
+    expect(desc.promptDetails.path).toBeUndefined();
+  });
+
   it("populates logContext with tool input preview fields", () => {
     const check = makeCheckResult("ask", { toolName: "bash", command: "ls" });
     const desc = describeToolGate(
