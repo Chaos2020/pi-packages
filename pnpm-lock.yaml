@@ -186,6 +186,12 @@ importers:
 
   packages/pi-permission-system:
     dependencies:
+      '@earendil-works/pi-ai':
+        specifier: ^0.79.0
+        version: 0.79.1(ws@8.20.1)(zod@4.4.3)
+      agentic-logger:
+        specifier: file:/mnt/big10T/wrk/AgenticLogger/sdks/ts
+        version: file:../../AgenticLogger/sdks/ts
       tree-sitter-bash:
         specifier: ^0.25.1
         version: 0.25.1
@@ -1248,6 +1254,10 @@ packages:
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
     engines: {node: '>= 14'}
+
+  agentic-logger@file:../../AgenticLogger/sdks/ts:
+    resolution: {directory: ../../AgenticLogger/sdks/ts, type: directory}
+    engines: {node: '>=18'}
 
   ajv@6.15.0:
     resolution: {integrity: sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw==}
@@ -3074,6 +3084,8 @@ snapshots:
   acorn@8.16.0: {}
 
   agent-base@7.1.4: {}
+
+  agentic-logger@file:../../AgenticLogger/sdks/ts: {}
 
   ajv@6.15.0:
     dependencies:
