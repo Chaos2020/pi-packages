@@ -1248,10 +1248,11 @@ describe("yolo grants asks synthesized after resolution", () => {
   it("yolo does not grant the wrapper deny floor — a floored wrapper blocks", async () => {
     // Q2-2 semantics: the floor is a synthetic *deny* (not an ask), and yolo
     // grants only asks — a wrapper unit is blocked regardless of yolo unless
-    // a wrapperAllowlist entry covers it.
+    // a wrapperAllowlist entry covers it or the whole chain is read-only.
+    // `xargs rm` is not read-only, so it floors and blocks.
     const outcome = await runBashCommand(
       { ...permissiveBash, yoloMode: true },
-      "git status | xargs grep foo",
+      "git status | xargs rm foo.tmp",
     );
 
     expect(outcome.blocked).toBe(true);
@@ -1282,10 +1283,10 @@ describe("yolo grants asks synthesized after resolution", () => {
   it("blocks a denied wrapper under yolo", async () => {
     const outcome = await runBashCommand(
       {
-        permission: { "*": "allow", bash: { "*": "allow", "xargs*": "deny" } },
+        permission: { "*": "allow", bash: { "*": "allow", "xargs rm*": "deny" } },
         yoloMode: true,
       },
-      "git status | xargs grep foo",
+      "git status | xargs rm foo.tmp",
     );
 
     expect(outcome).toEqual({ blocked: true, prompts: [] });
