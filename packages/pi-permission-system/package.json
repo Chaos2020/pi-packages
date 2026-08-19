@@ -1,5 +1,5 @@
 {
-  "name": "smart-permissions",
+  "name": "gigapie-permissions",
   "version": "25.1.0",
   "description": "SmartPermissions — fork of @gotgenes/pi-permission-system with layered path/path_write gates, command-safety-judge (LLM), and fine-grained delegation envelope.",
   "type": "module",
