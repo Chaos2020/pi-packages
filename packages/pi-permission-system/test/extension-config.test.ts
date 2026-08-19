@@ -94,6 +94,7 @@ describe("normalizePermissionSystemConfig", () => {
       yoloMode: true,
     });
     expect(result).toEqual({
+      askTimeoutMs: 10000,
       debugLog: true,
       permissionReviewLog: false,
       yoloMode: true,
@@ -206,6 +207,33 @@ describe("normalizePermissionSystemConfig", () => {
   it("omits authorizerChain when absent", () => {
     const result = normalizePermissionSystemConfig({});
     expect("authorizerChain" in result).toBe(false);
+  });
+
+  it("defaults askTimeoutMs to 10000", () => {
+    const result = normalizePermissionSystemConfig({});
+    expect(result.askTimeoutMs).toBe(10000);
+  });
+
+  it("keeps an explicit askTimeoutMs (0 disables the timeout)", () => {
+    const result = normalizePermissionSystemConfig({ askTimeoutMs: 0 });
+    expect(result.askTimeoutMs).toBe(0);
+  });
+
+  it("falls back to the default for a negative askTimeoutMs instead of clamping to 0 (F8/m3)", () => {
+    const result = normalizePermissionSystemConfig({ askTimeoutMs: -1 });
+    expect(result.askTimeoutMs).toBe(10000);
+  });
+
+  it("falls back to the default for a non-finite askTimeoutMs (m3)", () => {
+    const result = normalizePermissionSystemConfig({
+      askTimeoutMs: Number.POSITIVE_INFINITY,
+    });
+    expect(result.askTimeoutMs).toBe(10000);
+  });
+
+  it("truncates a fractional askTimeoutMs (m3)", () => {
+    const result = normalizePermissionSystemConfig({ askTimeoutMs: 1234.9 });
+    expect(result.askTimeoutMs).toBe(1234);
   });
 });
 

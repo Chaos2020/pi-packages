@@ -125,11 +125,12 @@ describe("LocalUserAuthorizer", () => {
 
     await authorizer.authorize(details);
 
+    const prefs = makePromptPreferences();
     expect(decisionFn).toHaveBeenCalledWith(
-      { mode: "tui", ui, ...makePromptPreferences() },
+      { mode: "tui", ui, ...prefs },
       "Permission Required",
       details.payload,
-      undefined,
+      { askTimeoutMs: prefs.askTimeoutMs },
     );
   });
 
@@ -145,7 +146,7 @@ describe("LocalUserAuthorizer", () => {
       expect.anything(),
       expect.any(String),
       expect.anything(),
-      { sessionLabel: "Yes, for 'read' tool" },
+      expect.objectContaining({ sessionLabel: "Yes, for 'read' tool" }),
     );
   });
 
@@ -223,11 +224,12 @@ describe("LocalUserAuthorizer", () => {
 
       await authorizer.authorize(details);
 
+      const prefs = makePromptPreferences();
       expect(decisionFn).toHaveBeenCalledWith(
-        { mode: "tui", ui, ...makePromptPreferences() },
+        { mode: "tui", ui, ...prefs },
         "Permission Required (Subagent)",
         details.payload,
-        undefined,
+        { askTimeoutMs: prefs.askTimeoutMs },
       );
     });
 
@@ -251,13 +253,13 @@ describe("LocalUserAuthorizer", () => {
         expect.anything(),
         "Permission Required (Subagent)",
         expect.anything(),
-        {
+        expect.objectContaining({
           sessionScope: {
             subagentLabel: "This subagent ('Explore') only",
             servingSessionLabel:
               'The whole session — allow bash "git *" for parent and all subagents',
           },
-        },
+        }),
       );
     });
 
@@ -278,7 +280,7 @@ describe("LocalUserAuthorizer", () => {
         expect.anything(),
         expect.any(String),
         expect.anything(),
-        undefined,
+        expect.objectContaining({ askTimeoutMs: expect.any(Number) }),
       );
     });
   });

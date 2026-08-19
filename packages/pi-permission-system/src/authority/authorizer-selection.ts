@@ -54,6 +54,18 @@ export interface AskEscalator {
 export class AuthorizerSelection
   implements AskEscalator, AuthorizerSelectionLifecycle
 {
+  /**
+   * Operation keys whose previous ask timed out (resolution `ask_timeout`).
+   *
+   * When an ask times out, the agent receives a denial and looks for a
+   * no-auth alternative; if none exists it re-requests the same operation,
+   * which lands here again. For that follow-up ask the timeout is disabled
+   * (`askTimeoutMs: 0` — wait indefinitely), so a task that genuinely needs
+   * human permission cannot fail twice by silence. The entry is removed once
+   * the human actually answers, restoring the normal timeout for later asks.
+   */
+  private timedOutOps = new Set<string>();
+
   private authority: SelectedAuthority | null = null;
 
   constructor(
@@ -173,12 +185,50 @@ export class AuthorizerSelection
         new Error("escalate called before the session was activated"),
       );
     }
+    const opKey = operationKeyOf(details);
+    const retryingTimedOutOp = opKey !== null && this.timedOutOps.has(opKey);
     const chain = composeAuthorizerChain(
       this.linksFor(authority, details.requestId),
       authority.terminal,
       this.deps.getPermissionQuery(),
       this.deps.logger,
     );
-    return this.deps.prompter.prompt(chain, details);
+    return this.deps
+      .prompter.prompt(
+        chain,
+        retryingTimedOutOp ? { ...details, askTimeoutMs: 0 } : details,
+      )
+      .then((decision) => {
+        if (opKey !== null) {
+          if (decision.timedOut) {
+            // First (or another) silence: remember the operation so the next
+            // ask for it waits indefinitely — a task that needs permission
+            // must not fail twice by silence.
+            this.timedOutOps.add(opKey);
+          } else {
+            // A human (or a chain link) actually ruled: restore normal timeout.
+            this.timedOutOps.delete(opKey);
+          }
+        }
+        return decision;
+      });
   }
+}
+
+/**
+ * Normalize an ask into a stable operation key for timeout-retry tracking.
+ *
+ * Two asks for the same operation (same tool surface + same command/path/
+ * target) share a key, so an agent retrying after a timeout is recognized as
+ * the same task. Returns `null` when no stable payload exists (the ask is not
+ * tracked).
+ */
+function operationKeyOf(details: PromptPermissionDetails): string | null {
+  const surface = details.toolName ?? details.surface ?? "";
+  const payload =
+    details.command ?? details.path ?? details.target ?? details.value ?? "";
+  if (surface === "" && payload === "") {
+    return null;
+  }
+  return `${surface}\u0000${payload}`;
 }

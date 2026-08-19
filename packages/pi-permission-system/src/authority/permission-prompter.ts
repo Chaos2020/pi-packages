@@ -70,6 +70,15 @@ export interface PromptPermissionDetails {
    * no intent leaves this absent.
    */
   accessIntent?: ForwardedAccessFacts;
+  /**
+   * Per-ask override of the session's `askTimeoutMs`. `0` waits indefinitely.
+   * Set by the escalation layer on a **timeout retry**: when an ask timed out
+   * and the agent re-requests the same operation (no better no-auth
+   * alternative exists), the follow-up ask must not time out again — it waits
+   * for a human decision. Absent on a first ask, so the session preference
+   * applies.
+   */
+  askTimeoutMs?: number;
 }
 
 /**
@@ -128,9 +137,11 @@ export class PermissionPrompter implements PermissionPrompterApi {
         : "permission_request.denied",
       {
         ...details,
-        resolution: decision.confirmationUnavailable
-          ? "confirmation_unavailable"
-          : decision.state,
+        resolution: decision.timedOut
+          ? "ask_timeout"
+          : decision.confirmationUnavailable
+            ? "confirmation_unavailable"
+            : decision.state,
         denialReason: decision.denialReason,
         decidedBy: decision.decidedBy,
       },

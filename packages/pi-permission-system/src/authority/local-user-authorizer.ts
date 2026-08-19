@@ -59,7 +59,12 @@ export class LocalUserAuthorizer implements TerminalAuthorizer {
         ? "Permission Required (Subagent)"
         : "Permission Required",
       details.payload,
-      buildRequestOptions(details),
+      {
+        ...buildRequestOptions(details),
+        askTimeoutMs:
+          details.askTimeoutMs ??
+          this.deps.getPromptPreferences().askTimeoutMs,
+      },
     );
   }
 }

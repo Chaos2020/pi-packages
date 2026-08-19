@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createTimedOutPermissionDecision,
   createDeniedPermissionDecision,
   isPermissionDecisionState,
   normalizePermissionDenialReason,
@@ -295,5 +296,90 @@ describe("createDeniedPermissionDecision", () => {
       approved: false,
       state: "denied",
     });
+  });
+});
+
+
+describe("ask timeout (askTimeoutMs)", () => {
+  it("auto-denies with timedOut markers when the select times out", async () => {
+    const selectFn = vi.fn().mockResolvedValue(undefined);
+    const ui: PermissionDecisionUi = { select: selectFn, input: vi.fn() };
+    const result = await requestPermissionDecisionFromUi(
+      ui,
+      "Title",
+      "Message",
+      { askTimeoutMs: 3000 },
+    );
+    expect(selectFn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.arrayContaining(["Yes"]),
+      { timeout: 3000 },
+    );
+    expect(result.approved).toBe(false);
+    expect(result.timedOut).toBe(true);
+    expect(result.confirmationUnavailable).toBe(true);
+  });
+
+  it("asks without a timeout when askTimeoutMs is 0 (waits indefinitely)", async () => {
+    const selectFn = vi.fn().mockResolvedValue("Yes");
+    const ui: PermissionDecisionUi = { select: selectFn, input: vi.fn() };
+    const result = await requestPermissionDecisionFromUi(
+      ui,
+      "Title",
+      "Message",
+      { askTimeoutMs: 0 },
+    );
+    expect(selectFn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      { timeout: undefined },
+    );
+    expect(result).toEqual({ approved: true, state: "approved" });
+  });
+
+  it("treats an undefined select without an armed timeout as a plain user dismissal", async () => {
+    const ui: PermissionDecisionUi = {
+      select: vi.fn().mockResolvedValue(undefined),
+      input: vi.fn(),
+    };
+    const result = await requestPermissionDecisionFromUi(
+      ui,
+      "Title",
+      "Message",
+    );
+    expect(result).toEqual({ approved: false, state: "denied" });
+  });
+
+  it("denies (never approves) when the scope select times out", async () => {
+    const selectFn = vi
+      .fn()
+      .mockResolvedValueOnce("Yes, for this session")
+      .mockResolvedValueOnce(undefined);
+    const ui: PermissionDecisionUi = { select: selectFn, input: vi.fn() };
+    const result = await requestPermissionDecisionFromUi(
+      ui,
+      "Title",
+      "Message",
+      {
+        askTimeoutMs: 3000,
+        sessionScope: {
+          subagentLabel: "This subagent only",
+          servingSessionLabel: "The whole session",
+        },
+      },
+    );
+    expect(result.approved).toBe(false);
+    expect(result.timedOut).toBe(true);
+  });
+});
+
+describe("ask timeout — createTimedOutPermissionDecision", () => {
+  it("denies with timeout provenance markers", () => {
+    const decision = createTimedOutPermissionDecision();
+    expect(decision.approved).toBe(false);
+    expect(decision.state).toBe("denied");
+    expect(decision.timedOut).toBe(true);
+    expect(decision.confirmationUnavailable).toBe(true);
+    expect(decision.denialReason).toContain("timed out");
   });
 });
