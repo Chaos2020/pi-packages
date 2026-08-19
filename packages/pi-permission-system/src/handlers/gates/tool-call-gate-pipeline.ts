@@ -52,6 +52,12 @@ export interface ToolCallGateInputs {
    * tool is gated through the bash stack at parity with native `bash` (#574).
    */
   getShellToolAliases(): ShellToolsConfig | undefined;
+  /**
+   * The configured wrapper allowlist (`wrapperAllowlist`), consulted by the
+   * bash-command gate so explicitly trusted wrapper commands bypass the
+   * wrapper deny floor. Optional; `undefined` means empty.
+   */
+  getWrapperAllowlist?(): readonly string[];
 }
 
 /**
@@ -184,6 +190,7 @@ export class ToolCallGatePipeline {
             bashProgram.commands(),
             tcc.agentName ?? undefined,
             this.resolver,
+            this.inputs.getWrapperAllowlist?.() ?? [],
           ),
         };
       }

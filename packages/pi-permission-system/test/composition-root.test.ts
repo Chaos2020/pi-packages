@@ -1245,24 +1245,29 @@ describe("yolo grants asks synthesized after resolution", () => {
     permission: { "*": "allow", bash: { "*": "allow" } },
   };
 
-  it("auto-approves an indirection wrapper under yolo", async () => {
+  it("yolo does not grant the wrapper deny floor — a floored wrapper blocks", async () => {
+    // Q2-2 semantics: the floor is a synthetic *deny* (not an ask), and yolo
+    // grants only asks — a wrapper unit is blocked regardless of yolo unless
+    // a wrapperAllowlist entry covers it.
     const outcome = await runBashCommand(
       { ...permissiveBash, yoloMode: true },
       "git status | xargs grep foo",
     );
 
-    expect(outcome).toEqual({ blocked: false, prompts: [] });
+    expect(outcome.blocked).toBe(true);
   });
 
-  it("still floors an indirection wrapper to a prompt with yolo off", async () => {
+  it("wrapperAllowlist entry keeps an indirection wrapper allowed under yolo", async () => {
     const outcome = await runBashCommand(
-      { ...permissiveBash, yoloMode: false },
+      {
+        ...permissiveBash,
+        yoloMode: true,
+        wrapperAllowlist: ["xargs grep"],
+      },
       "git status | xargs grep foo",
     );
 
-    expect(outcome.blocked).toBe(false);
-    expect(outcome.prompts).toHaveLength(1);
-    expect(outcome.prompts[0]).toContain("<indirection-bash-wrapper>");
+    expect(outcome).toEqual({ blocked: false, prompts: [] });
   });
 
   it("auto-approves an unparseable command under yolo", async () => {

@@ -45,18 +45,52 @@ import type { PermissionCheckResult } from "#src/types";
  */
 /**
  * The synthetic `matchedPattern` recorded when a wrapper unit's `allow` is
- * floored to `ask`, keyed by the wrapper kind that caused the floor.
+ * floored to `deny`, keyed by the wrapper kind that caused the floor.
  */
 const WRAPPER_SENTINEL: Record<WrapperKind, string> = {
   "opaque-payload": "<opaque-bash-wrapper>",
   indirection: "<indirection-bash-wrapper>",
 };
 
+/** Denial reason attached when a wrapper unit's `allow` is floored to `deny`. */
+const WRAPPER_FLOOR_REASON =
+  "indirection/opaque wrapper cannot be judged safely — denied by default; ask the user or operator to review and explicitly trust this command if it should run";
+
+/**
+ * True when a wrapper command unit matches any `wrapperAllowlist` entry as a
+ * complete token-sequence prefix: split the entry and the unit on whitespace;
+ * every entry token — the last included — must equal the command token at the
+ * same position (whole-token equality, never a substring/prefix inside a
+ * longer token). An empty allowlist matches nothing (full floor).
+ */
+export function wrapperAllowlisted(
+  unitText: string,
+  wrapperAllowlist: readonly string[],
+): boolean {
+  const unitTokens = unitText.trim().split(/\s+/);
+  for (const entry of wrapperAllowlist) {
+    const entryTokens = entry.trim().split(/\s+/);
+    if (entryTokens.length === 0 || entryTokens.length > unitTokens.length) {
+      continue;
+    }
+    let matched = true;
+    for (let i = 0; i < entryTokens.length; i++) {
+      if (entryTokens[i] !== unitTokens[i]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return true;
+  }
+  return false;
+}
+
 export function resolveBashCommandCheck(
   command: string,
   commands: BashCommand[],
   agentName: string | undefined,
   resolver: ScopedPermissionResolver,
+  wrapperAllowlist: readonly string[] = [],
 ): PermissionCheckResult {
   if (commands.length === 0) {
     if (isTriviallyEmptyCommand(command)) {
@@ -85,11 +119,14 @@ export function resolveBashCommandCheck(
     });
     const floored =
       cmd.wrapperKind && base.state === "allow"
-        ? {
-            ...base,
-            state: "ask" as const,
-            matchedPattern: WRAPPER_SENTINEL[cmd.wrapperKind],
-          }
+        ? wrapperAllowlisted(cmd.text, wrapperAllowlist)
+          ? base
+          : {
+              ...base,
+              state: "deny" as const,
+              matchedPattern: WRAPPER_SENTINEL[cmd.wrapperKind],
+              denialReason: WRAPPER_FLOOR_REASON,
+            }
         : base;
     const result = cmd.context
       ? { ...floored, commandContext: cmd.context }

@@ -110,6 +110,15 @@
         "minLength": 1
       }
     },
+    "wrapperAllowlist": {
+      "description": "Commands **explicitly trusted** to bypass the wrapper deny floor, matched as a complete token-sequence prefix (whole-token equality, the last included). Defaults to [].",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
     "askTimeoutMs": {
       "description": "Auto-deny an unanswered permission ask after this many milliseconds. 0 disables the timeout (the prompt waits indefinitely). Defaults to 10000.",
       "default": 10000,

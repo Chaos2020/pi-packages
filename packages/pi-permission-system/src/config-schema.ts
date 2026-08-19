@@ -256,6 +256,11 @@ export const unifiedConfigSchema = z
         "Ordered names of registered **live-authority chain links** (e.g. a model judge) to consult before the terminal authorizer (the human, or the subagent-forwarding / headless-deny fallback).\n\nA link reviews an `ask` and returns `allow` / `deny` (with an optional teaching reason) / `defer` to the next link. Three invariants govern the chain:\n\n- **Config order wins.** The order here \u2014 not the order extensions register in \u2014 fixes the security-relevant chain order.\n- **Fail-safe skip.** A name with no registered link is skipped with a warning; the `ask` still reaches the terminal (more prompting, never less).\n- **Opt-in activation.** Installing a judge extension grants it no authority; a link decides nothing until you name it here.\n\nThe chain owner caps every verdict with a bounded-delegation checkpoint: a link's `allow` on an excluded surface (`external_directory` or `path`) is downgraded to `defer`, so a link cannot exceed your policy.\n\nDefaults to an empty list (no links).",
       default: [],
     }),
+    wrapperAllowlist: z.array(z.string().min(1)).optional().meta({
+      description:
+        "Commands **explicitly trusted** to bypass the wrapper deny floor, matched as a complete token-sequence prefix (whole-token equality, the last included). Defaults to [].",
+      default: [],
+    }),
     askTimeoutMs: z.number().int().min(0).optional().meta({
       description:
         "Auto-deny an unanswered permission ask after this many milliseconds. 0 disables the timeout (the prompt waits indefinitely). Defaults to 10000.",

@@ -33,6 +33,11 @@ export interface PermissionSystemExtensionConfig {
    * 0 disables the timeout. Defaults to DEFAULT_ASK_TIMEOUT_MS (10000).
    */
   askTimeoutMs?: number;
+  /**
+   * Wrapper commands explicitly trusted to bypass the wrapper deny floor.
+   * Only add entries you have deliberately vetted. Defaults to [].
+   */
+  wrapperAllowlist?: string[];
   /** Non-bash tools that carry shell semantics, keyed by tool name. */
   shellTools?: ShellToolsConfig;
   /** Ordered names of registered live-authority chain links to consult before the terminal authorizer. */
@@ -59,6 +64,7 @@ export const DEFAULT_ASK_TIMEOUT_MS = 10000;
 
 export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {
   askTimeoutMs: DEFAULT_ASK_TIMEOUT_MS,
+  wrapperAllowlist: [],
   debugLog: false,
   permissionReviewLog: true,
   yoloMode: false,
@@ -122,6 +128,11 @@ export function normalizePermissionSystemConfig(
     result.authorizerChain = raw.authorizerChain;
   }
   result.askTimeoutMs = normalizeAskTimeoutMs(raw.askTimeoutMs);
+  if (raw.wrapperAllowlist !== undefined) {
+    result.wrapperAllowlist = raw.wrapperAllowlist.filter(
+      (entry) => typeof entry === "string" && entry.trim().length > 0,
+    );
+  }
   return result;
 }
 

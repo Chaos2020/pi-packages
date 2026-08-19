@@ -235,12 +235,26 @@ export function mergeUnifiedConfigs(
   }
 
   // Array fields: override replaces base when defined
-  for (const key of ["piInfrastructureReadPaths", "authorizerChain"] as const) {
+  for (const key of [
+    "piInfrastructureReadPaths",
+    "authorizerChain",
+    "wrapperAllowlist",
+  ] as const) {
     const value = override[key] ?? base[key];
     if (value !== undefined) {
       merged[key] = value;
     }
   }
+
+  // Scalar/simple fields added by the fork patches (see config-schema).
+  const askTimeoutMs = override.askTimeoutMs ?? base.askTimeoutMs;
+  if (askTimeoutMs !== undefined) merged.askTimeoutMs = askTimeoutMs;
+  const permissionMode = override.permissionMode ?? base.permissionMode;
+  if (permissionMode !== undefined) {
+    merged.permissionMode = permissionMode;
+  }
+  const dryRun = override.dryRun ?? base.dryRun;
+  if (dryRun !== undefined) merged.dryRun = dryRun;
 
   // shellTools: shallow-merge by tool name so a project entry overrides a
   // colliding tool's alias but never drops a global entry (a dropped alias is

@@ -52,6 +52,8 @@ function cloneDefaultConfig(): PermissionSystemExtensionConfig {
     permissionReviewLog: DEFAULT_EXTENSION_CONFIG.permissionReviewLog,
     yoloMode: DEFAULT_EXTENSION_CONFIG.yoloMode,
     doublePressToConfirm: DEFAULT_EXTENSION_CONFIG.doublePressToConfirm,
+    askTimeoutMs: DEFAULT_EXTENSION_CONFIG.askTimeoutMs,
+    wrapperAllowlist: [...(DEFAULT_EXTENSION_CONFIG.wrapperAllowlist ?? [])],
   };
 }
 

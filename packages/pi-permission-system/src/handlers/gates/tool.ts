@@ -124,6 +124,11 @@ export function describeToolGate(
       toolCallId: tcc.toolCallId,
       toolName: tcc.toolName,
       sessionLabel: suggestion.label,
+      // The lexical absolute path for path-bearing tools, so downstream
+      // consumers (command-safety-judge's `manualConfirmGlobs`) can match
+      // the touched file instead of seeing `path: undefined` and skipping
+      // the manual-confirm whitelist.
+      path: pathAccess?.path.value(),
       accessIntent,
       ...permissionLogContext,
     },

