@@ -76,6 +76,13 @@ function decideFromVerdict(
         ...createDeniedPermissionDecision(verdict.reason),
         decidedBy: decidedByLink(name, "deny", verdict.reason ?? null),
       };
+    case "suggest":
+      // Refuse the current call; the alternative reaches the model as the
+      // denial reason, steering it to a no-auth path (no human prompt).
+      return {
+        ...createDeniedPermissionDecision(verdict.alternative),
+        decidedBy: decidedByLink(name, "suggest", verdict.alternative),
+      };
     case "defer":
       return null;
   }
@@ -83,7 +90,7 @@ function decideFromVerdict(
 
 function decidedByLink(
   name: string,
-  verdict: "allow" | "deny",
+  verdict: "allow" | "deny" | "suggest",
   reason: string | null,
 ): DecisionSource {
   return { kind: "authorizer", name, verdict, reason };

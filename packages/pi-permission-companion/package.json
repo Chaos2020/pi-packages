@@ -1,0 +1,67 @@
+{
+  "name": "@gotgenes/pi-permission-companion",
+  "version": "0.0.0",
+  "description": "Companion extensions for pi-permission-system: command-safety judge, path extractors (serena/MCP gateway), secret scan, AgenticLogger mirror, deny-storm alerting",
+  "type": "module",
+  "imports": {
+    "#src/*": "./src/*",
+    "#test/*": "./test/*"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "permissions",
+    "authorizer",
+    "security"
+  ],
+  "author": {
+    "name": "Chaos2020"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:Chaos2020/pi-packages.git",
+    "directory": "packages/pi-permission-companion"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "src",
+    "schemas",
+    "docs/*.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check . && eslint ."
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.79.0",
+    "@earendil-works/pi-coding-agent": ">=0.79.0",
+    "gigapie-permissions": ">=25.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "catalog:",
+    "@earendil-works/pi-ai": "0.79.1",
+    "@earendil-works/pi-coding-agent": "0.79.1",
+    "gigapie-permissions": "workspace:*",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

@@ -24,7 +24,7 @@ export type DecisionSource =
   | {
       kind: "authorizer";
       name: string;
-      verdict: "allow" | "deny";
+      verdict: "allow" | "deny" | "suggest";
       reason: string | null;
     }
   /** Recorded authority: a rule in the composed ruleset matched. */

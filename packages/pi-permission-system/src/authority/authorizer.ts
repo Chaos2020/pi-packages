@@ -23,7 +23,8 @@ import type { SubagentDetector } from "./subagent-detection";
 export type AuthorizerVerdict =
   | { kind: "allow" }
   | { kind: "deny"; reason?: string }
-  | { kind: "defer" };
+  | { kind: "suggest"; alternative: string }
+  | { kind: "defer"; note?: string };
 
 /**
  * A non-terminal link in the live-authority chain: reviews an `ask` and may
