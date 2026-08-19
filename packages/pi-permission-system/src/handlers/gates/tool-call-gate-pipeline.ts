@@ -23,6 +23,7 @@ import { describeExternalDirectoryGate } from "./external-directory";
 import { describePathGate } from "./path";
 import type { GateRunner } from "./runner";
 import { describeSkillReadGate } from "./skill-read";
+import { describeToolPathWriteGate } from "./tool-path-write";
 import { describeToolGate, type ToolPathAccess } from "./tool";
 import type { GateOutcome, ToolCallContext } from "./types";
 
@@ -106,6 +107,13 @@ export class ToolCallGatePipeline {
         ),
       () =>
         describePathGate(tcc, this.resolver, normalizer, this.customExtractors),
+      () =>
+        describeToolPathWriteGate(
+          tcc,
+          this.resolver,
+          normalizer,
+          this.customExtractors,
+        ),
       () =>
         describeExternalDirectoryGate(
           tcc,

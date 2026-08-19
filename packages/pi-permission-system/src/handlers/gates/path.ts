@@ -1,11 +1,14 @@
-import { getToolInputPath } from "#src/access-intent/tool-input-path";
+import {
+  getToolInputPath,
+  unwrapGatewayCall,
+} from "#src/access-intent/tool-input-path";
 import type { PathNormalizer } from "#src/path-normalizer";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import { buildPathAskPayload } from "#src/presentation/path-ask-payload";
 import { SessionApproval } from "#src/session-approval";
 import type { ToolAccessExtractorLookup } from "#src/tool-access-extractor-registry";
 import type { GateDescriptor, GateResult } from "./descriptor";
-import { accessFactsFromPath } from "./helpers";
+import { accessFactsFromPath, isCreateWithinCwd } from "./helpers";
 import type { ToolCallContext } from "./types";
 
 /**
@@ -22,7 +25,10 @@ export function describePathGate(
   normalizer: PathNormalizer,
   extractors?: ToolAccessExtractorLookup,
 ): GateResult {
-  const filePath = getToolInputPath(tcc.toolName, tcc.input, extractors);
+  const effective = unwrapGatewayCall(tcc.toolName, tcc.input);
+  if (!effective) return null; // string args failed JSON.parse — dispatch throws
+  const { toolName: effToolName, input: effInput } = effective;
+  const filePath = getToolInputPath(effToolName, effInput, extractors);
   if (!filePath) return null;
 
   // Emit an access-path intent so the resolver matches the lexical aliases
@@ -43,12 +49,18 @@ export function describePathGate(
   // "path" key should not trigger path-level prompts (#58).
   if (check.matchedPattern === undefined) return null;
 
+  // Creating a not-yet-existing entry inside the cwd is granted by default:
+  // sensitive-name rules (`*.env`) protect existing secrets, not new project
+  // files (isCreateWithinCwd). Existing files and out-of-cwd paths keep
+  // their deny/ask outcome.
+  if (isCreateWithinCwd(normalizer, accessPath)) return null;
+
   // Derive the approval pattern from the lexical absolute form so it matches
   // the policy values a later call produces.
   const pattern = normalizer.approvalPatternFor(accessPath);
 
   const payload = buildPathAskPayload({
-    toolName: tcc.toolName,
+    toolName: effToolName,
     pathValue: filePath,
     agentName: tcc.agentName,
     matchedPattern: check.matchedPattern,
@@ -63,7 +75,7 @@ export function describePathGate(
       source: "tool_call",
       agentName: tcc.agentName,
       toolCallId: tcc.toolCallId,
-      toolName: tcc.toolName,
+      toolName: effToolName,
       path: filePath,
       accessIntent: accessFactsFromPath("path", accessPath),
     },
