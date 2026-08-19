@@ -29,7 +29,10 @@ import { getGlobalConfigPath } from "./config-paths";
 import { ConfigStore } from "./config-store";
 import { DecisionAudit } from "./decision-audit";
 import { GateDecisionReporter } from "./decision-reporter";
-import { isYoloModeEnabled } from "./extension-config";
+import {
+  DEFAULT_ASK_TIMEOUT_MS,
+  isYoloModeEnabled,
+} from "./extension-config";
 import { computeExtensionPaths } from "./extension-paths";
 import {
   AgentPrepHandler,
@@ -138,6 +141,8 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     getPromptPreferences: () => ({
       doublePressToConfirm: configStore.current().doublePressToConfirm,
       budget: resolveRenderBudget(configStore.current()),
+      askTimeoutMs:
+        configStore.current().askTimeoutMs ?? DEFAULT_ASK_TIMEOUT_MS,
     }),
     requestPermissionDecision,
     forwardingDir: paths.forwardingDir,

@@ -110,6 +110,13 @@
         "minLength": 1
       }
     },
+    "askTimeoutMs": {
+      "description": "Auto-deny an unanswered permission ask after this many milliseconds. 0 disables the timeout (the prompt waits indefinitely). Defaults to 10000.",
+      "default": 10000,
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
     "permission": {
       "type": "object",
       "propertyNames": {

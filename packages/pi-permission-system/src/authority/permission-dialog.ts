@@ -29,6 +29,14 @@ export type PermissionPromptDecision = {
    */
   confirmationUnavailable?: true;
   /**
+   * True when the ask was auto-denied because the user did not answer within
+   * `askTimeoutMs` — the dialog (TUI timer or the RPC select/input timeout)
+   * settled the ask as denied rather than hanging. Distinguishes a timeout
+   * denial from an active user denial in logs and review entries (resolution
+   * "ask_timeout"). Always accompanies `confirmationUnavailable`.
+   */
+  timedOut?: true;
+  /**
    * What decided this request, stamped by the site that decided it.
    *
    * Required: every decision names its decider, and the type is what
@@ -50,8 +58,25 @@ export type PermissionPromptDecision = {
 export type UnattributedDecision = Omit<PermissionPromptDecision, "decidedBy">;
 
 export interface PermissionDecisionUi {
-  select(title: string, options: string[]): Promise<string | undefined>;
-  input(title: string, placeholder?: string): Promise<string | undefined>;
+  /**
+   * Select an option. Passing pi's native `{ timeout }` dialog option resolves
+   * `undefined` when no answer arrives in time; the caller treats that as a
+   * timeout denial.
+   */
+  select(
+    title: string,
+    options: string[],
+    opts?: { timeout?: number },
+  ): Promise<string | undefined>;
+  /**
+   * Free-text input. Same native `{ timeout }` option and timeout-denial
+   * handling as `select`.
+   */
+  input(
+    title: string,
+    placeholder?: string,
+    opts?: { timeout?: number },
+  ): Promise<string | undefined>;
 }
 
 const APPROVE_OPTION = "Yes";
@@ -86,6 +111,22 @@ export function createDeniedPermissionDecision(
       };
 }
 
+/**
+ * The decision settled when an ask goes unanswered past `askTimeoutMs`: denied
+ * by default — never allowed — with `timedOut` (plus
+ * `confirmationUnavailable`) marking that no human actively ruled, so logs and
+ * review entries can tell a timeout denial from a user denial.
+ */
+export function createTimedOutPermissionDecision(): UnattributedDecision {
+  return {
+    approved: false,
+    state: "denied",
+    denialReason: "permission ask timed out — denied by default",
+    timedOut: true,
+    confirmationUnavailable: true,
+  };
+}
+
 export function isPermissionDecisionState(
   value: unknown,
 ): value is PermissionDecisionState {
@@ -101,6 +142,13 @@ export function isPermissionDecisionState(
 export interface RequestPermissionOptions {
   /** Override the "for this session" option label (e.g. to show the suggested pattern). */
   sessionLabel?: string;
+  /**
+   * Auto-deny the ask after this many milliseconds of no answer (pi's native
+   * `{ timeout }` select/input parameter). `0` or `undefined` waits
+   * indefinitely. A timed-out select resolves as a timeout denial rather than
+   * a user dismissal.
+   */
+  askTimeoutMs?: number;
   /**
    * Forwarded asks only: when set, choosing the "for this session" option opens
    * a second select asking whether the grant applies to the requesting subagent
@@ -126,9 +174,22 @@ export async function requestPermissionDecisionFromUi(
     DENY_WITH_REASON_OPTION,
   ] as const;
 
-  const selected = await ui.select(`${title}\n${message}`, [
-    ...decisionOptions,
-  ]);
+  const timeoutMs =
+    options?.askTimeoutMs && options.askTimeoutMs > 0
+      ? options.askTimeoutMs
+      : undefined;
+
+  const selected = await ui.select(`${title}\n${message}`, [...decisionOptions], {
+    timeout: timeoutMs,
+  });
+
+  // A timed-out first select is a timeout denial; without an armed timeout,
+  // `undefined` is the user dismissing the dialog (plain user denial).
+  if (selected === undefined) {
+    return timeoutMs === undefined
+      ? createDeniedPermissionDecision()
+      : createTimedOutPermissionDecision();
+  }
 
   if (selected === APPROVE_OPTION) {
     return {
@@ -139,10 +200,15 @@ export async function requestPermissionDecisionFromUi(
 
   if (selected === sessionOption) {
     if (options?.sessionScope) {
-      const scope = await ui.select(`${title}\nApply this session grant to:`, [
-        options.sessionScope.subagentLabel,
-        options.sessionScope.servingSessionLabel,
-      ]);
+      const scope = await ui.select(
+        `${title}\nApply this session grant to:`,
+        [options.sessionScope.subagentLabel, options.sessionScope.servingSessionLabel],
+        { timeout: timeoutMs },
+      );
+      // A timed-out scope select must not fall back to an approval — deny.
+      if (scope === undefined && timeoutMs !== undefined) {
+        return createTimedOutPermissionDecision();
+      }
       return {
         approved: true,
         // A cancelled scope select (undefined) falls back to the
@@ -164,6 +230,7 @@ export async function requestPermissionDecisionFromUi(
       await ui.input(
         `${title}\nShare why this request was denied (optional).`,
         "Reason shown back to the agent",
+        { timeout: timeoutMs },
       ),
     );
 

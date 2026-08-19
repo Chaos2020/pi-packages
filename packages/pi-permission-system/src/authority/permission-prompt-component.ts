@@ -10,6 +10,7 @@ import type {
   UserDecisionSurface,
 } from "#src/authority/decision-source";
 import {
+  createTimedOutPermissionDecision,
   type PermissionPromptDecision,
   type RequestPermissionOptions,
   requestPermissionDecisionFromUi,
@@ -62,6 +63,12 @@ export interface PromptPreferences {
   doublePressToConfirm: boolean;
   /** How much room a render has; the terminal width is added per frame. */
   budget: RenderBudget;
+  /**
+   * Auto-deny an unanswered ask after this many milliseconds. `0` waits
+   * indefinitely. Drives the TUI dialog's internal timer and the RPC
+   * select/input `{ timeout }` option (see `RequestPermissionOptions`).
+   */
+  askTimeoutMs: number;
 }
 
 /**
@@ -145,8 +152,32 @@ export function presentInlinePermissionPrompt(
     sessionScope: options?.sessionScope,
   };
   return view.ui.custom<UnattributedDecision>(
-    (tui, theme, keybindings, done) =>
-      new PermissionPromptComponent(
+    (tui, theme, keybindings, done) => {
+      // Ask-timeout timer: an unanswered ask settles as a timeout denial
+      // (never an approval) once `askTimeoutMs` elapses; any user decision
+      // first clears the timer so the promise resolves exactly once.
+      // Any user keystroke cancels the timer — once the user has started
+      // interacting (arrow keys/letters/enter/esc), the ask must never be
+      // yanked away by a race with the timeout.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const cancelTimer = (): void => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+          timer = undefined;
+        }
+      };
+      if (view.askTimeoutMs > 0) {
+        timer = setTimeout(() => {
+          timer = undefined;
+          settle(createTimedOutPermissionDecision());
+        }, view.askTimeoutMs);
+        timer.unref?.();
+      }
+      const settle = (decision: UnattributedDecision): void => {
+        cancelTimer();
+        done(decision);
+      };
+      return new PermissionPromptComponent(
         theme,
         config,
         title,
@@ -156,8 +187,10 @@ export function presentInlinePermissionPrompt(
         () => {
           tui.requestRender();
         },
-        done,
-      ),
+        settle,
+        cancelTimer,
+      );
+    },
     { overlay: false },
   );
 }
@@ -203,6 +236,7 @@ class PermissionPromptComponent implements Component {
     private readonly handleAppAction: (data: string) => boolean,
     private readonly requestRender: () => void,
     private readonly done: (decision: UnattributedDecision) => void,
+    private readonly onUserActivity?: () => void,
   ) {
     this.state = initialPromptState(config);
     this.reason = this.createReasonEditor();
@@ -285,6 +319,9 @@ class PermissionPromptComponent implements Component {
   }
 
   handleInput(data: string): void {
+    // Any user keystroke means the user is actively deciding — stop the
+    // ask-timeout race so the dialog is never yanked away mid-interaction.
+    this.onUserActivity?.();
     if (this.state.step === "reason") {
       this.handleReasonInput(data);
       return;

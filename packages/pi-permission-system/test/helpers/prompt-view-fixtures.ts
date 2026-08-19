@@ -18,6 +18,7 @@ export function makePromptPreferences(
   return {
     doublePressToConfirm: true,
     budget: DEFAULT_RENDER_BUDGET,
+    askTimeoutMs: 0,
     ...overrides,
   };
 }
