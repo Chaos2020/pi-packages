@@ -599,6 +599,11 @@ function unavailableDecision(denialReason: unknown) {
 
 describe("ParentAuthorizer abandonment", () => {
   test("reports an unresolvable target as unavailable, not user-denied", async () => {
+    // The resolver reads process.env directly; isolate from ambient subagent
+    // env vars (the test runner itself may run inside a pi subagent) so the
+    // "unresolvable" case is truly unresolvable in any environment.
+    vi.stubEnv("PI_AGENT_ROUTER_PARENT_SESSION_ID", undefined);
+    vi.stubEnv("PI_SUBAGENT_PARENT_SESSION", undefined);
     const authorizer = new ParentAuthorizer(
       makeForwarderContext({ hasUI: false, sessionId: "child-session" }),
       makeParentAuthorizerDeps({
