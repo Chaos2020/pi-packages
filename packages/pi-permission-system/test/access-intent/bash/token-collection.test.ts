@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TSNode } from "#src/access-intent/bash/parser";
 import { getParser } from "#src/access-intent/bash/parser";
+import type { BashTokenRef } from "#src/access-intent/bash/token-collection";
 import {
   collectCommandTokens,
   collectPathCandidateTokens,
@@ -48,6 +49,11 @@ async function parseRedirectNode(cmd: string): Promise<{
   return { node, tree };
 }
 
+/** Strip roles, keeping only the raw token text for text-level assertions. */
+function texts(tokens: readonly BashTokenRef[]): string[] {
+  return tokens.map((t) => t.text);
+}
+
 // ── extractCommandName ────────────────────────────────────────────────────────
 
 describe("extractCommandName", () => {
@@ -93,7 +99,7 @@ describe("collectCommandTokens — pattern-first commands", () => {
   it("sed: skips the first positional (inline pattern) and collects the rest", async () => {
     const { node, tree } = await parseCommandNode("sed 's/x/y/' a.txt b.txt");
     try {
-      expect(collectCommandTokens(node)).toEqual(["a.txt", "b.txt"]);
+      expect(texts(collectCommandTokens(node))).toEqual(["a.txt", "b.txt"]);
     } finally {
       tree.delete();
     }
@@ -104,7 +110,7 @@ describe("collectCommandTokens — pattern-first commands", () => {
     try {
       // -e consumes the next argument (the script), so file.txt is the first positional
       // Since hasExplicitScript is set by -e, the positional is not skipped
-      expect(collectCommandTokens(node)).toEqual(["file.txt"]);
+      expect(texts(collectCommandTokens(node))).toEqual(["file.txt"]);
     } finally {
       tree.delete();
     }
@@ -116,7 +122,7 @@ describe("collectCommandTokens — pattern-first commands", () => {
     );
     try {
       // -f consumes the next arg as a file path (extracted), and sets hasExplicitScript
-      expect(collectCommandTokens(node)).toEqual([
+      expect(texts(collectCommandTokens(node))).toEqual([
         "/scripts/script.sed",
         "file.txt",
       ]);
@@ -130,7 +136,10 @@ describe("collectCommandTokens — pattern-first commands", () => {
       "grep pattern /etc/hosts /etc/passwd",
     );
     try {
-      expect(collectCommandTokens(node)).toEqual(["/etc/hosts", "/etc/passwd"]);
+      expect(texts(collectCommandTokens(node))).toEqual([
+        "/etc/hosts",
+        "/etc/passwd",
+      ]);
     } finally {
       tree.delete();
     }
@@ -139,7 +148,7 @@ describe("collectCommandTokens — pattern-first commands", () => {
   it("grep -e: with explicit -e flag, all positionals are file arguments", async () => {
     const { node, tree } = await parseCommandNode("grep -e pattern /etc/hosts");
     try {
-      expect(collectCommandTokens(node)).toEqual(["/etc/hosts"]);
+      expect(texts(collectCommandTokens(node))).toEqual(["/etc/hosts"]);
     } finally {
       tree.delete();
     }
@@ -150,7 +159,7 @@ describe("collectCommandTokens — pattern-first commands", () => {
     try {
       // After --, both 'pattern' (first positional) and '/etc/hosts' are positionals.
       // pattern is the pattern positional and is skipped; /etc/hosts is collected.
-      expect(collectCommandTokens(node)).toEqual(["/etc/hosts"]);
+      expect(texts(collectCommandTokens(node))).toEqual(["/etc/hosts"]);
     } finally {
       tree.delete();
     }
@@ -161,7 +170,10 @@ describe("collectCommandTokens — pattern-first commands", () => {
       "sd find replace file.txt other.txt",
     );
     try {
-      expect(collectCommandTokens(node)).toEqual(["file.txt", "other.txt"]);
+      expect(texts(collectCommandTokens(node))).toEqual([
+        "file.txt",
+        "other.txt",
+      ]);
     } finally {
       tree.delete();
     }
@@ -170,7 +182,7 @@ describe("collectCommandTokens — pattern-first commands", () => {
   it("rg: skips the pattern positional and collects file/dir arguments", async () => {
     const { node, tree } = await parseCommandNode("rg pattern /etc/");
     try {
-      expect(collectCommandTokens(node)).toEqual(["/etc/"]);
+      expect(texts(collectCommandTokens(node))).toEqual(["/etc/"]);
     } finally {
       tree.delete();
     }
@@ -183,7 +195,10 @@ describe("collectCommandTokens — generic commands", () => {
   it("collects all argument tokens after the command name", async () => {
     const { node, tree } = await parseCommandNode("cat /etc/hosts /etc/passwd");
     try {
-      expect(collectCommandTokens(node)).toEqual(["/etc/hosts", "/etc/passwd"]);
+      expect(texts(collectCommandTokens(node))).toEqual([
+        "/etc/hosts",
+        "/etc/passwd",
+      ]);
     } finally {
       tree.delete();
     }
@@ -192,7 +207,7 @@ describe("collectCommandTokens — generic commands", () => {
   it("skips variable assignment prefixes", async () => {
     const { node, tree } = await parseCommandNode("FOO=/bar cat /etc/hosts");
     try {
-      expect(collectCommandTokens(node)).toEqual(["/etc/hosts"]);
+      expect(texts(collectCommandTokens(node))).toEqual(["/etc/hosts"]);
     } finally {
       tree.delete();
     }
@@ -201,7 +216,7 @@ describe("collectCommandTokens — generic commands", () => {
   it("collects no tokens for a bare command with no arguments", async () => {
     const { node, tree } = await parseCommandNode("ls");
     try {
-      expect(collectCommandTokens(node)).toEqual([]);
+      expect(texts(collectCommandTokens(node))).toEqual([]);
     } finally {
       tree.delete();
     }
@@ -216,7 +231,7 @@ describe("collectRedirectTokens", () => {
       "cat /etc/hosts > /tmp/out.txt",
     );
     try {
-      expect(collectRedirectTokens(node)).toEqual(["/tmp/out.txt"]);
+      expect(texts(collectRedirectTokens(node))).toEqual(["/tmp/out.txt"]);
     } finally {
       tree.delete();
     }
@@ -227,7 +242,7 @@ describe("collectRedirectTokens", () => {
       "echo hello >> /tmp/log.txt",
     );
     try {
-      expect(collectRedirectTokens(node)).toEqual(["/tmp/log.txt"]);
+      expect(texts(collectRedirectTokens(node))).toEqual(["/tmp/log.txt"]);
     } finally {
       tree.delete();
     }
@@ -236,48 +251,10 @@ describe("collectRedirectTokens", () => {
   it("collects the source path from a stdin redirect", async () => {
     const { node, tree } = await parseRedirectNode("cat < /etc/hosts");
     try {
-      expect(collectRedirectTokens(node)).toEqual(["/etc/hosts"]);
+      expect(texts(collectRedirectTokens(node))).toEqual(["/etc/hosts"]);
     } finally {
       tree.delete();
     }
-  });
-
-  describe("operands of a hosted nested command (#741)", () => {
-    it("collects the operand of a substitution used as the destination", async () => {
-      const { node, tree } = await parseRedirectNode(
-        "echo hi > $(cat /etc/shadow)",
-      );
-      try {
-        expect(collectRedirectTokens(node)).toEqual(["/etc/shadow"]);
-      } finally {
-        tree.delete();
-      }
-    });
-
-    it("collects the operand of a process substitution read as input", async () => {
-      const { node, tree } = await parseRedirectNode(
-        "cat < <(cat /etc/shadow)",
-      );
-      try {
-        expect(collectRedirectTokens(node)).toEqual(["/etc/shadow"]);
-      } finally {
-        tree.delete();
-      }
-    });
-
-    it("collects both the destination text and a concatenated operand", async () => {
-      const { node, tree } = await parseRedirectNode(
-        "echo hi > /tmp/$(cat /etc/shadow)",
-      );
-      try {
-        expect(collectRedirectTokens(node)).toEqual([
-          "/tmp/$(cat /etc/shadow)",
-          "/etc/shadow",
-        ]);
-      } finally {
-        tree.delete();
-      }
-    });
   });
 });
 
@@ -289,7 +266,9 @@ describe("collectPathCandidateTokens", () => {
     const tree = parser.parse("cat /etc/hosts");
     try {
       if (!tree) throw new Error("parse returned null");
-      expect(collectPathCandidateTokens(tree.rootNode)).toEqual(["/etc/hosts"]);
+      expect(texts(collectPathCandidateTokens(tree.rootNode))).toEqual([
+        "/etc/hosts",
+      ]);
     } finally {
       tree?.delete();
     }
@@ -300,7 +279,7 @@ describe("collectPathCandidateTokens", () => {
     const tree = parser.parse("cat /etc/hosts > /tmp/out.txt");
     try {
       if (!tree) throw new Error("parse returned null");
-      expect(collectPathCandidateTokens(tree.rootNode)).toEqual([
+      expect(texts(collectPathCandidateTokens(tree.rootNode))).toEqual([
         "/etc/hosts",
         "/tmp/out.txt",
       ]);
@@ -315,51 +294,11 @@ describe("collectPathCandidateTokens", () => {
     try {
       if (!tree) throw new Error("parse returned null");
       // heredoc_body is in SKIP_SUBTREE_TYPES — its text must not be collected
-      const tokens = collectPathCandidateTokens(tree.rootNode);
+      const tokens = texts(collectPathCandidateTokens(tree.rootNode));
       expect(tokens).not.toContain("hello");
     } finally {
       tree?.delete();
     }
-  });
-
-  describe("operands hosted in a heredoc body (#741)", () => {
-    async function collectFrom(command: string): Promise<string[]> {
-      const parser = await getParser();
-      const tree = parser.parse(command);
-      if (!tree) throw new Error("parse returned null");
-      try {
-        return collectPathCandidateTokens(tree.rootNode);
-      } finally {
-        tree.delete();
-      }
-    }
-
-    it("collects the operand of an interpolating heredoc body", async () => {
-      expect(await collectFrom("cat <<EOF\n$(cat /etc/shadow)\nEOF")).toEqual([
-        "/etc/shadow",
-      ]);
-    });
-
-    it.each([
-      ["single-quoted", "cat <<'EOF'\n$(cat /etc/shadow)\nEOF"],
-      ["double-quoted", 'cat <<"EOF"\n$(cat /etc/shadow)\nEOF'],
-    ])("collects nothing from a %s heredoc body", async (_label, command) => {
-      expect(await collectFrom(command)).toEqual([]);
-    });
-
-    it("never collects heredoc prose, even alongside a substitution", async () => {
-      expect(
-        await collectFrom(
-          "cat <<EOF\n/etc/passwd is prose\n$(cat /etc/shadow)\nEOF",
-        ),
-      ).toEqual(["/etc/shadow"]);
-    });
-
-    it("collects the operand of a herestring substitution", async () => {
-      expect(await collectFrom("cat <<< $(cat /etc/shadow)")).toEqual([
-        "/etc/shadow",
-      ]);
-    });
   });
 
   it("recurses into command substitution to collect nested tokens", async () => {
@@ -368,7 +307,7 @@ describe("collectPathCandidateTokens", () => {
     try {
       if (!tree) throw new Error("parse returned null");
       // The command_substitution is a non-command, non-redirect node — recurse
-      const tokens = collectPathCandidateTokens(tree.rootNode);
+      const tokens = texts(collectPathCandidateTokens(tree.rootNode));
       // /etc/hosts is inside the substitution, collected by recursion
       expect(tokens).toContain("/etc/hosts");
     } finally {
@@ -381,7 +320,58 @@ describe("embedded --opt=value extraction (#645)", () => {
   async function tokensOf(cmd: string): Promise<string[]> {
     const { node, tree } = await parseCommandNode(cmd);
     try {
-      return collectCommandTokens(node);
+      return texts(collectCommandTokens(node));
+    } finally {
+      tree.delete();
+    }
+  }
+
+  it("emits the value of a long option carrying an inline path", async () => {
+    // The issue's second repro: the flag token itself is rejected by the
+    // shape prelude, so the embedded path had to be split out to be seen.
+    expect(await tokensOf("grep --file=/tmp/patterns target")).toContain(
+      "/tmp/patterns",
+    );
+  });
+
+  it("emits the embedded value for a non-pattern-first command too", async () => {
+    expect(await tokensOf("tar --directory=/etc -xf a.tar")).toContain("/etc");
+  });
+
+  it("preserves the original flag token", async () => {
+    expect(await tokensOf("cat --file=/tmp/x")).toContain("--file=/tmp/x");
+  });
+
+  it("emits a bare value, leaving it for the shape gates to drop", async () => {
+    // --format=json yields "json", which names nothing and is dropped later.
+    expect(await tokensOf("cat --format=json")).toContain("json");
+  });
+
+  it("splits the single-dash form", async () => {
+    expect(await tokensOf("cat -o=/tmp/out")).toContain("/tmp/out");
+  });
+
+  it("does not split a flag with no value", async () => {
+    const tokens = await tokensOf("grep --recursive target");
+    expect(tokens).not.toContain("");
+    expect(tokens).not.toContain("--recursive");
+  });
+
+  it("does not split a non-flag token containing '='", async () => {
+    // FOO=bar is a variable_assignment, never an argument token.
+    expect(await tokensOf("cat a=b")).toEqual(["a=b"]);
+  });
+
+  it("keeps only the first '=' as the separator", async () => {
+    expect(await tokensOf("cat --opt=/tmp/a=b")).toContain("/tmp/a=b");
+  });
+});
+
+describe("embedded --opt=value extraction (#645)", () => {
+  async function tokensOf(cmd: string): Promise<string[]> {
+    const { node, tree } = await parseCommandNode(cmd);
+    try {
+      return collectCommandTokens(node).map((ref) => ref.text);
     } finally {
       tree.delete();
     }

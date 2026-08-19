@@ -228,7 +228,7 @@ const SHELL_WRAPPER_NAMES = new Set(["bash", "sh", "dash", "zsh", "ksh"]);
  * (not the inner command) is what a bash rule matches. Floored by command-name
  * basename alone. Extend this set to cover another always-invoking wrapper.
  */
-const INDIRECTION_WRAPPER_NAMES = new Set([
+export const INDIRECTION_WRAPPER_NAMES = new Set([
   "sudo",
   "env",
   "xargs",
@@ -255,7 +255,7 @@ const INDIRECTION_WRAPPER_NAMES = new Set([
  * exactly matches one of the tool's exec flags. Extend by adding a tool with
  * its exec-flag set.
  */
-const EXEC_CONDITIONAL_WRAPPERS = new Map<string, ReadonlySet<string>>([
+export const EXEC_CONDITIONAL_WRAPPERS = new Map<string, ReadonlySet<string>>([
   ["find", new Set(["-exec", "-execdir", "-ok", "-okdir"])],
   ["fd", new Set(["-x", "--exec", "-X", "--exec-batch"])],
 ]);

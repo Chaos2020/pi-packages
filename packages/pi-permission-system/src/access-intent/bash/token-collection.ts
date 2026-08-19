@@ -1,9 +1,12 @@
 import { basename } from "node:path";
 import {
-  EXECUTION_HOST_TYPES,
   forEachNestedExecution,
   NESTED_EXECUTION_CONTEXTS,
 } from "#src/access-intent/bash/nested-execution";
+import {
+  EXEC_CONDITIONAL_WRAPPERS,
+  INDIRECTION_WRAPPER_NAMES,
+} from "#src/access-intent/bash/wrapper-analysis";
 import {
   ARG_NODE_TYPES,
   resolveNodeText,
@@ -14,30 +17,147 @@ import type { TSNode } from "#src/access-intent/bash/parser";
 // ── Public surface ─────────────────────────────────────────────────────────
 
 /**
+ * The access direction of a bash path token, used to route the token to the
+ * right protection layer:
+ *
+ * - `"read"`  — the path is actually opened/read (file-read commands, script
+ *   execution, redirect input). Checked against the information-security
+ *   `path` surface (deny secret reads).
+ * - `"write"` — the path is modified/moved/removed/overwritten (write
+ *   commands, redirect output). Checked against the integrity-protection
+ *   `path_write` surface (protect key files and secrets from damage).
+ * - `"arg"`   — a business argument passed to a script/program; the shell
+ *   does not treat it as a filesystem target, so neither path layer applies.
+ *
+ * Layering read vs write keeps information security and file integrity as
+ * two independent filters: `cat ~/.env` (read) triggers the secret rule
+ * while `sys-backup.sh is-tracked "$HOME/.env"` (arg) does not, and
+ * `echo x > ~/.bashrc` (write) triggers the key-file rule while
+ * `cat ~/.bashrc` (read) stays allowed.
+ */
+export type BashTokenRole = "read" | "write" | "arg";
+
+/** A bash path-candidate token paired with its access direction. */
+export interface BashTokenRef {
+  readonly text: string;
+  readonly role: BashTokenRole;
+}
+
+/**
+ * Commands whose positional arguments are file-read targets: the argument
+ * path is opened and read, so the information-security `path` surface
+ * applies. Flags and inline patterns are still filtered downstream by the
+ * shape classifiers.
+ */
+const FILE_READ_COMMANDS: ReadonlySet<string> = new Set([
+  "cat",
+  "tac",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "sed",
+  "awk",
+  "gawk",
+  "nawk",
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "vim",
+  "vi",
+  "nano",
+  "diff",
+  "patch",
+  "wc",
+  "sort",
+  "uniq",
+  "cut",
+  "stat",
+  "file",
+  "tar",
+  "unzip",
+  "gunzip",
+  "gzip",
+  "bzip2",
+  "xz",
+  "openssl",
+  "gpg",
+  "ssh-keygen",
+  "find",
+  "rsync",
+  "scp",
+  "cd",
+  "curl",
+  "wget",
+]);
+
+/**
+ * Commands whose positional arguments are write/delete targets: the argument
+ * path is modified, moved, removed, or overwritten, so the integrity
+ * `path_write` surface applies (protect key files, secrets, and configs from
+ * damage).
+ */
+const FILE_WRITE_COMMANDS: ReadonlySet<string> = new Set([
+  "cp",
+  "mv",
+  "rm",
+  "tee",
+  "dd",
+  "shred",
+  "install",
+  "ln",
+  "touch",
+  "mkdir",
+  "chmod",
+  "chown",
+  "truncate",
+]);
+
+/**
+ * Commands whose first positional argument is a script/program to execute
+ * (the shell reads that file to run it) and whose remaining positional
+ * arguments are business arguments passed to the script — never filesystem
+ * targets from the shell's perspective. Only the script argument is a read
+ * target.
+ */
+const SCRIPT_EXEC_COMMANDS: ReadonlySet<string> = new Set([
+  "bash",
+  "sh",
+  "zsh",
+  "dash",
+  "ksh",
+  ".",
+  "source",
+  "python",
+  "python2",
+  "python3",
+  "node",
+  "deno",
+  "bun",
+  "ruby",
+  "perl",
+  "php",
+  "npx",
+]);
+
+/**
  * Recursively visit the AST and collect resolved text of nodes that
  * represent command arguments or redirect destinations.
  *
- * Reads no text from `heredoc_body`, `heredoc_end`, or `comment` subtrees, but
- * still descends an execution host for the commands it hosts — an interpolating
- * heredoc body runs its substitution even though its prose is never an operand
- * (#741). That is why the {@link EXECUTION_HOST_TYPES} branch sits above the
- * {@link SKIP_SUBTREE_TYPES} check: `heredoc_body` is in both sets, and the
- * host reading is the one that must win.
+ * Skips `heredoc_body`, `heredoc_end`, and `comment` subtrees entirely.
  *
  * For commands in `PATTERN_FIRST_COMMANDS`, uses position-based
  * argument skipping to avoid collecting inline patterns/scripts
  * as path candidates. For all other commands, collects all
  * arguments generically.
  */
-export function collectPathCandidateTokens(node: TSNode): string[] {
+export function collectPathCandidateTokens(node: TSNode): BashTokenRef[] {
+  if (SKIP_SUBTREE_TYPES.has(node.type)) return [];
   if (node.type === "command") return collectCommandTokens(node);
   if (node.type === "file_redirect") return collectRedirectTokens(node);
-  if (EXECUTION_HOST_TYPES.has(node.type)) {
-    return collectHostedExecutionTokens(node);
-  }
-  if (SKIP_SUBTREE_TYPES.has(node.type)) return [];
 
-  const tokens: string[] = [];
+  const tokens: BashTokenRef[] = [];
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (child) tokens.push(...collectPathCandidateTokens(child));
@@ -50,7 +170,14 @@ export function collectPathCandidateTokens(node: TSNode): string[] {
  * commands use `collectPatternCommandTokens`; all others use
  * `collectGenericCommandTokens`.
  */
-export function collectCommandTokens(node: TSNode): string[] {
+export function collectCommandTokens(node: TSNode): BashTokenRef[] {
+  // An indirection wrapper (env/timeout/nohup/find -exec/…) hides the real
+  // command: classifying every token by the wrapper name would tag them all
+  // `arg` and let paths escape the path/path_write gates (C5). Penetrate to
+  // the visible inner command and classify by it instead.
+  if (isIndirectionWrapperNode(node)) {
+    return collectIndirectionWrapperTokens(node);
+  }
   const commandName = extractCommandName(node);
   const config = commandName
     ? PATTERN_FIRST_COMMANDS.get(commandName)
@@ -61,26 +188,213 @@ export function collectCommandTokens(node: TSNode): string[] {
   return [...tokens, ...collectEmbeddedOptionValues(node)];
 }
 
+// ── Indirection-wrapper penetration (C5) ───────────────────────────────────
+
+/**
+ * Shell command names whose `-c` flag introduces an opaque inline program —
+ * mirrors `SHELL_WRAPPER_NAMES` in command-enumeration (kept local to avoid
+ * widening that module's private surface further).
+ */
+const OPAQUE_PAYLOAD_NAMES = new Set([
+  "eval",
+  "bash",
+  "sh",
+  "dash",
+  "zsh",
+  "ksh",
+]);
+
+/**
+ * True when a `command` node is an indirection wrapper (per
+ * `classifyWrapperCommand` semantics): an always-invoking prefix wrapper
+ * (env/timeout/nohup/…) or a search tool carrying a per-result exec flag
+ * (find -exec / fd -x). Opaque payloads (`bash -c`/`eval`) are excluded —
+ * they cannot be penetrated and take the conservative fallback.
+ */
+function isIndirectionWrapperNode(node: TSNode): boolean {
+  const name = extractCommandName(node);
+  if (name === undefined) return false;
+  if (name === "eval") return false;
+  if (INDIRECTION_WRAPPER_NAMES.has(name)) return true;
+  const execFlags = EXEC_CONDITIONAL_WRAPPERS.get(name);
+  if (!execFlags) return false;
+  return commandArgTexts(node).some((text) => execFlags.has(text));
+}
+
+/**
+ * The resolved text of a command node's argument-like named children, after
+ * the command name and excluding `variable_assignment` prefix nodes.
+ */
+function commandArgTexts(node: TSNode): string[] {
+  const texts: string[] = [];
+  let seenName = false;
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child?.isNamed) continue;
+    if (child.type === "command_name") {
+      seenName = true;
+      continue;
+    }
+    if (child.type === "variable_assignment") continue;
+    if (!seenName && ARG_NODE_TYPES.has(child.type)) {
+      seenName = true;
+      continue;
+    }
+    if (ARG_NODE_TYPES.has(child.type)) texts.push(resolveNodeText(child));
+  }
+  return texts;
+}
+
+/**
+ * True when a token is a prefix-wrapper option consumed by the wrapper itself:
+ * a short/long flag, an inline environment assignment (`VAR=value`), or a
+ * numeric duration (`timeout 30s`/`60`). Mirrors the penetration skip in the
+ * bash command gate's read-only fast path. Wrappers whose flags cannot be
+ * penetrated this way (`sudo`/`doas`, B1) never reach this skip — they are
+ * collected as conservative read-all instead.
+ */
+function isPrefixWrapperOption(text: string): boolean {
+  return (
+    (text.startsWith("-") && text.length > 1) ||
+    /^[A-Za-z_][A-Za-z0-9_]*=/.test(text) ||
+    /^\d/.test(text)
+  );
+}
+
+/**
+ * Prefix wrappers whose option grammar cannot be penetrated safely (B1):
+ * `sudo`/`doas` flag sets are open-ended (`-p`/`-a`/`-c`/`-r`/`-t`/`-T`/`-U`
+ * take values, `-s`/`-i` spawn shells, `-l`/`-C` are privileged) — skipping
+ * options by shape would misread a value as the inner command, so every
+ * argument token is collected as `read`, the strictly more-checking
+ * direction (never a blanket `arg`).
+ */
+const IMPENETRABLE_WRAPPER_NAMES = new Set(["sudo", "doas"]);
+
+/**
+ * True when an inner command name with its following argument texts forms an
+ * opaque payload (`eval`, or a shell with a `-c` short-flag cluster) that
+ * cannot be penetrated.
+ */
+function isOpaqueInnerCommand(
+  name: string,
+  following: readonly string[],
+): boolean {
+  if (name === "eval") return true;
+  if (!OPAQUE_PAYLOAD_NAMES.has(name)) return false;
+  return following.some(
+    (text) =>
+      text.startsWith("-") && !text.startsWith("--") && text.includes("c"),
+  );
+}
+
+/**
+ * Collect path-candidate tokens for an indirection wrapper by penetrating to
+ * the visible inner command and classifying by it (C5).
+ *
+ * Prefix wrappers (env/timeout/nohup/…, nested ones included): wrapper option
+ * tokens (`-x`, `VAR=v`, durations) are skipped, and the remaining tokens are
+ * classified exactly as if the inner command headed the node — so
+ * `timeout 60 cat .env` tags `.env` `read` and `nohup rm -rf /tmp/x` tags
+ * `/tmp/x` `write`, routing both into the path gates.
+ *
+ * Conservative fallbacks — never a blanket `arg` (that would silently skip the
+ * path gates): an exec-conditional wrapper (find -exec/fd -x, whose options
+ * and search paths interleave), an unpenetrable wrapper (`sudo`/`doas`, whose
+ * open-ended flag grammar makes option-skipping unsafe, B1), an opaque inner
+ * payload (`bash -c`/`eval`), or a bare wrapper with no inner command collects
+ * every argument token as `read`, the strictly more-checking direction.
+ */
+function collectIndirectionWrapperTokens(node: TSNode): BashTokenRef[] {
+  const wrapperName = extractCommandName(node);
+  if (
+    wrapperName !== undefined &&
+    (EXEC_CONDITIONAL_WRAPPERS.has(wrapperName) ||
+      IMPENETRABLE_WRAPPER_NAMES.has(wrapperName))
+  ) {
+    return collectPlainGenericTokens(node, "read");
+  }
+  const args = commandArgTexts(node);
+  let i = 0;
+  let innerName: string | undefined;
+  for (;;) {
+    while (i < args.length) {
+      if (isPrefixWrapperOption(args[i])) {
+        i++;
+        continue;
+      }
+      break;
+    }
+    if (i >= args.length) break;
+    const candidate = basename(args[i]);
+    if (
+      IMPENETRABLE_WRAPPER_NAMES.has(candidate) ||
+      EXEC_CONDITIONAL_WRAPPERS.has(candidate) ||
+      isOpaqueInnerCommand(candidate, args.slice(i + 1))
+    ) {
+      break; // conservatively fall back to read-all
+    }
+    if (INDIRECTION_WRAPPER_NAMES.has(candidate)) {
+      i++; // nested prefix wrapper — keep penetrating
+      continue;
+    }
+    innerName = candidate;
+    break;
+  }
+  if (innerName === undefined) {
+    return collectPlainGenericTokens(node, "read");
+  }
+  const tokens = collectWithCommandRole(node, innerName, args.length - i - 1);
+  return [...tokens, ...collectEmbeddedOptionValues(node)];
+}
+
+/**
+ * Classify a command node's arguments by an explicitly supplied command name
+ * (the penetrated inner command), skipping the wrapper prefix and the inner
+ * command name itself: `skipArgs` argument tokens after the wrapper prefix.
+ */
+function collectWithCommandRole(
+  node: TSNode,
+  commandName: string,
+  skipArgs: number,
+): BashTokenRef[] {
+  const config = PATTERN_FIRST_COMMANDS.get(commandName);
+  if (config) return collectPatternCommandTokens(node, config, skipArgs);
+  if (SCRIPT_EXEC_COMMANDS.has(commandName)) {
+    return collectScriptExecTokens(node, skipArgs);
+  }
+  if (commandName === "git") return collectGitTokens(node, skipArgs);
+  return collectPlainGenericTokens(
+    node,
+    argRoleForCommand(commandName),
+    skipArgs,
+  );
+}
+
 /**
  * Collect redirect-destination tokens from a `file_redirect` node.
- *
- * The destination itself is an argument value (`> out.txt`), but it can also
- * host a command that really runs (`> $(cat /etc/shadow)`, `< <(cmd)`), whose
- * own operands are path candidates too — so each child is both read for its
- * text and searched for nested executions (#741).
- *
- * Both passes are needed: a substitution can be the destination outright, or be
- * concatenated into it (`> ${DIR}/$(cmd)`), and a `concatenation` is itself an
- * argument node.
  */
-export function collectRedirectTokens(node: TSNode): string[] {
-  const tokens: string[] = [];
+export function collectRedirectTokens(node: TSNode): BashTokenRef[] {
+  const tokens: BashTokenRef[] = [];
+  let write = false;
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
-    if (ARG_NODE_TYPES.has(child.type)) {
-      tokens.push(resolveNodeText(child));
+    if (child.type === "file_descriptor") continue;
+    if (!child.isNamed) {
+      // Anonymous operator token: `<` is input (read); `>`/`>>`/`2>`/`&>`
+      // are output (write). A here-string `<<<` contains no `>` and stays read.
+      if (child.text.includes(">")) write = true;
+      continue;
     }
+    if (ARG_NODE_TYPES.has(child.type)) {
+      tokens.push({
+        text: resolveNodeText(child),
+        role: write ? "write" : "read",
+      });
+    }
+    // #741: the destination can host a command that really runs
+    // (`> $(cat /etc/shadow)`); its own operands are path candidates too.
     tokens.push(...collectHostedExecutionTokens(child));
   }
   return tokens;
@@ -88,20 +402,13 @@ export function collectRedirectTokens(node: TSNode): string[] {
 
 /**
  * Collect the path-candidate tokens of every command nested inside `node`'s
- * execution contexts, reading none of the host subtree's own text.
- *
- * This is what lets a heredoc body contribute its substitution's operands while
- * its prose stays out of the path surface entirely.
- *
- * `node` may be a context outright (`> $(cmd)`) or merely contain one
- * (`> ${DIR}/$(cmd)`); `forEachNestedExecution` searches strictly within a
- * subtree, so the first case is checked here.
+ * execution contexts, reading none of the host subtree's own text (#741).
  */
-function collectHostedExecutionTokens(node: TSNode): string[] {
+function collectHostedExecutionTokens(node: TSNode): BashTokenRef[] {
   if (NESTED_EXECUTION_CONTEXTS.has(node.type)) {
     return collectPathCandidateTokens(node);
   }
-  const tokens: string[] = [];
+  const tokens: BashTokenRef[] = [];
   forEachNestedExecution(node, (contextNode) => {
     tokens.push(...collectPathCandidateTokens(contextNode));
   });
@@ -148,8 +455,8 @@ const OPTION_VALUE_PATTERN = /^-{1,2}[^=\s]+=(.+)$/;
  * here is what lets the projection see option-embedded paths without per-command
  * option tables (ADR 0009, #645).
  */
-function collectEmbeddedOptionValues(node: TSNode): string[] {
-  const values: string[] = [];
+function collectEmbeddedOptionValues(node: TSNode): BashTokenRef[] {
+  const values: BashTokenRef[] = [];
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
@@ -158,7 +465,7 @@ function collectEmbeddedOptionValues(node: TSNode): string[] {
     if (!ARG_NODE_TYPES.has(child.type)) continue;
 
     const value = OPTION_VALUE_PATTERN.exec(resolveNodeText(child))?.[1];
-    if (value !== undefined) values.push(value);
+    if (value !== undefined) values.push({ text: value, role: "arg" });
   }
   return values;
 }
@@ -322,13 +629,15 @@ function classifyPatternCommandFlag(
 function collectPatternCommandTokens(
   node: TSNode,
   config: PatternCommandConfig,
-): string[] {
+  skipArgs = 0,
+): BashTokenRef[] {
   const patternPositionals = config.patternPositionals ?? 1;
   let hasExplicitScript = false;
   let positionalsSeen = 0;
   let nextArgAction: "skip" | "extract" | null = null;
   let pastEndOfFlags = false;
-  const tokens: string[] = [];
+  let wrapperArgsRemaining = skipArgs;
+  const tokens: BashTokenRef[] = [];
 
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
@@ -345,6 +654,13 @@ function collectPatternCommandTokens(
       continue;
     }
 
+    // Wrapper-penetration prefix (C5): drop the wrapper option tokens and the
+    // inner command name before classifying the payload.
+    if (wrapperArgsRemaining > 0) {
+      wrapperArgsRemaining--;
+      continue;
+    }
+
     const text = resolveNodeText(child);
 
     // Handle consumed argument from previous flag.
@@ -353,7 +669,7 @@ function collectPatternCommandTokens(
       continue;
     }
     if (nextArgAction === "extract") {
-      tokens.push(text);
+      tokens.push({ text, role: "read" });
       nextArgAction = null;
       continue;
     }
@@ -386,8 +702,8 @@ function collectPatternCommandTokens(
       continue; // Skip: this is an inline pattern/script.
     }
 
-    // File argument — collect as path candidate.
-    tokens.push(text);
+    // File argument — collect as a read target.
+    tokens.push({ text, role: "read" });
   }
 
   return tokens;
@@ -395,11 +711,49 @@ function collectPatternCommandTokens(
 
 /**
  * Collect all argument tokens from a generic (non-pattern-first) command node,
- * skipping the command name and variable assignments.
+ * tagging each with its access direction, skipping the command name and
+ * variable assignments.
+ *
+ * The role is derived from the command name: file-read commands (cat/grep/…)
+ * get `read`, write commands (cp/rm/tee/…) get `write`, script executors
+ * (bash/python/…) get script-first handling, `git` gets rev-path handling,
+ * and everything else is a business argument (`arg`).
  */
-function collectGenericCommandTokens(node: TSNode): string[] {
-  const tokens: string[] = [];
+function collectGenericCommandTokens(node: TSNode): BashTokenRef[] {
+  const commandName = extractCommandName(node);
+  if (commandName !== undefined && SCRIPT_EXEC_COMMANDS.has(commandName)) {
+    return collectScriptExecTokens(node);
+  }
+  if (commandName === "git") {
+    return collectGitTokens(node);
+  }
+  return collectPlainGenericTokens(node, argRoleForCommand(commandName));
+}
+
+/**
+ * The read/write role for a generic command's positional arguments, or
+ * `"arg"` for unknown commands (business arguments are not filesystem
+ * targets from the shell's perspective).
+ */
+function argRoleForCommand(commandName: string | undefined): BashTokenRole {
+  if (commandName === undefined) return "arg";
+  if (FILE_READ_COMMANDS.has(commandName)) return "read";
+  if (FILE_WRITE_COMMANDS.has(commandName)) return "write";
+  return "arg";
+}
+
+/**
+ * Collect argument tokens for a command whose positional arguments all share
+ * one role (read, write, or business argument).
+ */
+function collectPlainGenericTokens(
+  node: TSNode,
+  role: BashTokenRole,
+  skipArgs = 0,
+): BashTokenRef[] {
+  const tokens: BashTokenRef[] = [];
   let seenCommandName = false;
+  let wrapperArgsRemaining = skipArgs;
 
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
@@ -419,13 +773,110 @@ function collectGenericCommandTokens(node: TSNode): string[] {
       continue;
     }
 
-    // Argument nodes: resolve their text and collect.
+    // Argument nodes: resolve their text and collect with the role.
     if (ARG_NODE_TYPES.has(child.type)) {
-      tokens.push(resolveNodeText(child));
+      if (wrapperArgsRemaining > 0) {
+        // Wrapper-penetration prefix (C5): skip the wrapper options and the
+        // inner command name — classification applies to the payload only.
+        wrapperArgsRemaining--;
+        continue;
+      }
+      tokens.push({ text: resolveNodeText(child), role });
       continue;
     }
 
     // Recurse into other children (e.g. command_substitution nested in args)
+    tokens.push(...collectPathCandidateTokens(child));
+  }
+
+  return tokens;
+}
+
+/**
+ * Collect arguments for a script executor (`bash script.sh a b`): the first
+ * non-flag positional is the script path (`read` — the shell reads it to run
+ * it), and every following positional is a business argument (`arg`) that is
+ * handed to the script, not opened by the shell.
+ */
+function collectScriptExecTokens(node: TSNode, skipArgs = 0): BashTokenRef[] {
+  const tokens: BashTokenRef[] = [];
+  let seenCommandName = false;
+  let scriptSeen = false;
+  let wrapperArgsRemaining = skipArgs;
+
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child) continue;
+
+    if (child.type === "command_name") {
+      seenCommandName = true;
+      continue;
+    }
+    if (child.type === "variable_assignment") continue;
+
+    if (!seenCommandName && ARG_NODE_TYPES.has(child.type)) {
+      seenCommandName = true;
+      continue;
+    }
+
+    if (ARG_NODE_TYPES.has(child.type)) {
+      if (wrapperArgsRemaining > 0) {
+        // Wrapper-penetration prefix (C5).
+        wrapperArgsRemaining--;
+        continue;
+      }
+      const text = resolveNodeText(child);
+      if (!scriptSeen && !(text.startsWith("-") && text.length > 1)) {
+        scriptSeen = true;
+        tokens.push({ text, role: "read" });
+      } else {
+        tokens.push({ text, role: "arg" });
+      }
+      continue;
+    }
+
+    tokens.push(...collectPathCandidateTokens(child));
+  }
+
+  return tokens;
+}
+
+/**
+ * Collect arguments for `git`: a `rev:path` token (`HEAD:.env`) addresses an
+ * object in the repo and is read (`read`); a plain path token (`check-ignore
+ * path`) is a business argument (`arg`) that git compares without opening.
+ */
+function collectGitTokens(node: TSNode, skipArgs = 0): BashTokenRef[] {
+  const tokens: BashTokenRef[] = [];
+  let seenCommandName = false;
+  let wrapperArgsRemaining = skipArgs;
+
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child) continue;
+
+    if (child.type === "command_name") {
+      seenCommandName = true;
+      continue;
+    }
+    if (child.type === "variable_assignment") continue;
+
+    if (!seenCommandName && ARG_NODE_TYPES.has(child.type)) {
+      seenCommandName = true;
+      continue;
+    }
+
+    if (ARG_NODE_TYPES.has(child.type)) {
+      if (wrapperArgsRemaining > 0) {
+        // Wrapper-penetration prefix (C5).
+        wrapperArgsRemaining--;
+        continue;
+      }
+      const text = resolveNodeText(child);
+      tokens.push({ text, role: text.includes(":") ? "read" : "arg" });
+      continue;
+    }
+
     tokens.push(...collectPathCandidateTokens(child));
   }
 

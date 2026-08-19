@@ -1,5 +1,8 @@
 import type { AccessPath } from "#src/access-intent/access-path";
-import type { BashProgram } from "#src/access-intent/bash/program";
+import type {
+  BashPathRuleCandidate,
+  BashProgram,
+} from "#src/access-intent/bash/program";
 import type { PathNormalizer } from "#src/path-normalizer";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import { buildPathAskPayload } from "#src/presentation/path-ask-payload";
@@ -7,7 +10,7 @@ import { SessionApproval } from "#src/session-approval";
 import type { PermissionCheckResult } from "#src/types";
 import { pickMostRestrictive } from "./candidate-check";
 import type { GateResult } from "./descriptor";
-import { accessFactsFromPath } from "./helpers";
+import { accessFactsFromPath, isCreateWithinCwd } from "./helpers";
 import type { ToolCallContext } from "./types";
 
 /**
@@ -49,16 +52,60 @@ export function describeBashPathGate(
     token: string;
     path: AccessPath;
     check: PermissionCheckResult;
+    role: BashPathRuleCandidate["role"];
   }> = [];
   let allSessionCovered = true;
 
-  for (const { token, path } of candidates) {
-    const check = resolver.resolve({
-      kind: "access-path",
-      surface: "path",
-      path,
-      agentName: tcc.agentName ?? undefined,
-    });
+  for (const { token, path, role } of candidates) {
+    // A business argument is not a filesystem target from the shell's
+    // perspective (`sys-backup.sh is-tracked "$HOME/.env"`) — neither
+    // protection layer applies, so the token is unrestricted.
+    if (role === "arg") {
+      allSessionCovered = false;
+      continue;
+    }
+
+    // Creating a not-yet-existing entry inside the cwd is granted by default:
+    // sensitive-name rules (`*.env`) protect existing secrets, not new
+    // project files. Exempting the token skips both write surfaces
+    // (`path_write` and `path`) at once — the token is unrestricted, exactly
+    // like an `arg`-role business argument.
+    if (role === "write" && isCreateWithinCwd(normalizer, path)) {
+      allSessionCovered = false;
+      continue;
+    }
+
+    // Route by access direction: reads go through the information-security
+    // `path` surface; writes go through the integrity `path_write` surface
+    // and additionally the `path` surface (a secret overwrite is both a
+    // leak and damage), taking the most restrictive result.
+    const check =
+      role === "write"
+        ? (pickMostRestrictive([
+            resolver.resolve({
+              kind: "access-path",
+              surface: "path_write",
+              path,
+              agentName: tcc.agentName ?? undefined,
+            }),
+            resolver.resolve({
+              kind: "access-path",
+              surface: "path",
+              path,
+              agentName: tcc.agentName ?? undefined,
+            }),
+          ]) ?? {
+            toolName: "path",
+            state: "allow",
+            source: "special",
+            origin: "builtin",
+          })
+        : resolver.resolve({
+            kind: "access-path",
+            surface: "path",
+            path,
+            agentName: tcc.agentName ?? undefined,
+          });
 
     // No explicit path rule matched — only the universal default fired.
     // Treat this token as unrestricted to preserve backward compatibility
@@ -73,11 +120,11 @@ export function describeBashPathGate(
     }
 
     if (check.state === "deny") {
-      uncovered.push({ token, path, check });
+      uncovered.push({ token, path, check, role });
       break; // Short-circuit on deny.
     }
     if (check.state === "ask") {
-      uncovered.push({ token, path, check });
+      uncovered.push({ token, path, check, role });
     }
   }
 
@@ -129,18 +176,24 @@ export function describeBashPathGate(
     matchedPattern: worstCheck.matchedPattern,
   });
 
+  // A write-direction token is gated by the integrity `path_write` surface;
+  // a read-direction token by the information-security `path` surface. The
+  // session approval and decision surface follow the same direction so a
+  // session grant scopes to the layer that actually fired.
+  const gateSurface = worstEntry.role === "write" ? "path_write" : "path";
+
   return {
-    surface: "path",
+    surface: gateSurface,
     input: { path: worstToken },
     payload,
-    sessionApproval: SessionApproval.single("path", pattern),
+    sessionApproval: SessionApproval.single(gateSurface, pattern),
     promptDetails: {
       source: "tool_call",
       agentName: tcc.agentName,
       toolCallId: tcc.toolCallId,
       toolName: tcc.toolName,
       command,
-      accessIntent: accessFactsFromPath("path", worstEntry.path),
+      accessIntent: accessFactsFromPath(gateSurface, worstEntry.path),
     },
     logContext: {
       source: "tool_call",
@@ -151,7 +204,7 @@ export function describeBashPathGate(
       path: worstToken,
     },
     decision: {
-      surface: "path",
+      surface: gateSurface,
       value: worstToken,
     },
     preCheck: worstCheck,

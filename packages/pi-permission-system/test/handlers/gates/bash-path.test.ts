@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 // Mock node:os so tilde-expansion is deterministic across platforms.
 vi.mock("node:os", () => {
@@ -70,6 +72,23 @@ async function describeGateOnPlatform(
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
+
+// The cwd-creation grant probes the filesystem (lstat), so existence-sensitive
+// tests need real entries: a real temp cwd containing an existing `.env` and
+// `smith.key`, plus a sibling temp dir for out-of-cwd targets. `node:os` is
+// mocked, so the temp root comes from TMPDIR directly.
+const realCwd = mkdtempSync(
+  join(process.env.TMPDIR ?? "/tmp", "piperm-bashpath-cwd-"),
+);
+const outsideDir = mkdtempSync(
+  join(process.env.TMPDIR ?? "/tmp", "piperm-bashpath-out-"),
+);
+writeFileSync(join(realCwd, ".env"), "SECRET=1\n");
+writeFileSync(join(realCwd, "smith.key"), "key-material\n");
+afterAll(() => {
+  rmSync(realCwd, { recursive: true, force: true });
+  rmSync(outsideDir, { recursive: true, force: true });
+});
 
 describe("describeBashPathGate", () => {
   it("returns null for non-bash tools", async () => {
@@ -194,8 +213,10 @@ describe("describeBashPathGate", () => {
       { ".env": makeCheckResult({ state: "deny", matchedPattern: "*.env" }) },
       makeCheckResult({ state: "allow" }),
     );
+    // cp is a write command: the cwd-creation grant exempts only
+    // not-yet-existing targets, so point at a real existing .env.
     const result = await describeGate(
-      makeTcc({ input: { command: "cp .env README.md" } }),
+      makeTcc({ input: { command: "cp .env README.md" }, cwd: realCwd }),
       resolver,
     );
     expect(result).not.toBeNull();
@@ -210,8 +231,10 @@ describe("describeBashPathGate", () => {
       { ".env": makeCheckResult({ state: "deny", matchedPattern: "*.env" }) },
       makeCheckResult({ state: "allow" }),
     );
+    // Redirect is a write: the cwd-creation grant exempts only
+    // not-yet-existing targets, so point at a real existing .env.
     const result = await describeGate(
-      makeTcc({ input: { command: "echo test > .env" } }),
+      makeTcc({ input: { command: "echo test > .env" }, cwd: realCwd }),
       resolver,
     );
     expect(result).not.toBeNull();
@@ -462,5 +485,250 @@ describe("describeBashPathGate — win32 backslash-relative paths", () => {
       resolver,
     );
     expect(result).toBeNull();
+  });
+});
+
+describe("describeBashPathGate — role routing (fork)", () => {
+  it("arg role: a script business argument is not a filesystem target (is-tracked)", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        "/mock/home/.pi/agent/auth.json": makeCheckResult({
+          state: "deny",
+          matchedPattern: "~/.pi/agent/auth.json",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    // `auth.json` is a business argument to sys-backup.sh is-tracked — the
+    // script compares the path string but neither reads nor writes the file,
+    // so neither protection layer fires.
+    const result = await describeGate(
+      makeTcc({
+        input: {
+          command:
+            'bash scripts/sys-backup.sh is-tracked "$HOME/.pi/agent/auth.json"',
+        },
+      }),
+      resolver,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("arg role: git check-ignore on an encrypted backup is not a read", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        "/mock/home/wrk/mySkills/backup/x.env.gpg": makeCheckResult({
+          state: "deny",
+          matchedPattern: "*.env.*",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    const result = await describeGate(
+      makeTcc({
+        input: {
+          command: "git check-ignore backup/x.env.gpg",
+        },
+      }),
+      resolver,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("read role: cat on a secret file still denies (info-security layer)", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        "/mock/home/.pi/agent/auth.json": makeCheckResult({
+          state: "deny",
+          matchedPattern: "~/.pi/agent/auth.json",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    const result = await describeGate(
+      makeTcc({
+        input: { command: 'cat "$HOME/.pi/agent/auth.json"' },
+      }),
+      resolver,
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
+    const desc = result as GateDescriptor;
+    expect(desc.preCheck?.state).toBe("deny");
+    expect(desc.decision.surface).toBe("path");
+  });
+
+  it("write role: redirect to a key config file asks via path_write surface", async () => {
+    const resolve = vi.fn<ScopedPermissionResolver["resolve"]>();
+    resolve.mockImplementation((intent) => {
+      if (intent.kind === "access-path") {
+        const values = intent.path.matchValues();
+        if (values.some((v) => v.includes("settings.json"))) {
+          return makeCheckResult({
+            state: intent.surface === "path_write" ? "ask" : "allow",
+            matchedPattern: "~/.pi/agent/settings.json",
+          });
+        }
+      }
+      return makeCheckResult({ state: "allow" });
+    });
+    const result = await describeGate(
+      makeTcc({
+        input: { command: 'echo x > "$HOME/.pi/agent/settings.json"' },
+      }),
+      { resolve },
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
+    const desc = result as GateDescriptor;
+    expect(desc.preCheck?.state).toBe("ask");
+    expect(desc.decision.surface).toBe("path_write");
+    expect(desc.sessionApproval?.toGateApproval()?.surface).toBe("path_write");
+  });
+
+  it("write role: redirect into an existing .env denies via path_write AND path", async () => {
+    const resolve = vi.fn<ScopedPermissionResolver["resolve"]>();
+    resolve.mockImplementation((intent) => {
+      if (intent.kind === "access-path") {
+        const values = intent.path.matchValues();
+        if (values.some((v) => v.endsWith(".env"))) {
+          return makeCheckResult({
+            state: "deny",
+            matchedPattern: "*.env",
+          });
+        }
+      }
+      return makeCheckResult({ state: "allow" });
+    });
+    // The cwd-creation grant exempts only not-yet-existing entries, so the
+    // target is a real existing .env inside a real temp cwd.
+    const result = await describeGate(
+      makeTcc({ input: { command: "echo secret > .env" }, cwd: realCwd }),
+      { resolve },
+    );
+    expect(result).not.toBeNull();
+    const desc = result as GateDescriptor;
+    expect(desc.preCheck?.state).toBe("deny");
+    expect(desc.decision.surface).toBe("path_write");
+  });
+
+  it("read role: stdin redirect of a secret file denies (read layer)", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        "/mock/home/.ssh/id_rsa": makeCheckResult({
+          state: "deny",
+          matchedPattern: "~/.ssh/*",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    const result = await describeGate(
+      makeTcc({
+        input: { command: 'cat < "$HOME/.ssh/id_rsa"' },
+      }),
+      resolver,
+    );
+    expect(result).not.toBeNull();
+    expect((result as GateDescriptor).preCheck?.state).toBe("deny");
+  });
+});
+
+describe("describeBashPathGate — cwd creation grant", () => {
+  it("returns null for a redirect to a not-yet-existing in-cwd .env", async () => {
+    const resolve = vi.fn<ScopedPermissionResolver["resolve"]>();
+    resolve.mockImplementation((intent) => {
+      if (
+        intent.kind === "access-path" &&
+        intent.path.matchValues().some((v) => v.endsWith(".env"))
+      ) {
+        return makeCheckResult({ state: "deny", matchedPattern: "*.env" });
+      }
+      return makeCheckResult({ state: "allow" });
+    });
+    const result = await describeGate(
+      makeTcc({
+        input: { command: "echo secret > new-credentials.env" },
+        cwd: realCwd,
+      }),
+      { resolve },
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null for touch on a not-yet-existing in-cwd .key", async () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "deny", matchedPattern: "*.key" }),
+    );
+    const result = await describeGate(
+      makeTcc({ input: { command: "touch deploy.key" }, cwd: realCwd }),
+      resolver,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("still denies stat on an existing in-cwd smith.key (read role)", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        [join(realCwd, "smith.key")]: makeCheckResult({
+          state: "deny",
+          matchedPattern: "*.key",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    const result = await describeGate(
+      makeTcc({ input: { command: "stat smith.key" }, cwd: realCwd }),
+      resolver,
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
+    expect((result as GateDescriptor).preCheck?.state).toBe("deny");
+  });
+
+  it("still denies creating a not-yet-existing .env outside the cwd", async () => {
+    const resolve = vi.fn<ScopedPermissionResolver["resolve"]>();
+    resolve.mockImplementation((intent) => {
+      if (
+        intent.kind === "access-path" &&
+        intent.path.matchValues().some((v) => v.endsWith(".env"))
+      ) {
+        return makeCheckResult({ state: "deny", matchedPattern: "*.env" });
+      }
+      return makeCheckResult({ state: "allow" });
+    });
+    const result = await describeGate(
+      makeTcc({
+        input: { command: `echo secret > ${join(outsideDir, "new.env")}` },
+        cwd: realCwd,
+      }),
+      { resolve },
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
+    expect((result as GateDescriptor).preCheck?.state).toBe("deny");
+  });
+
+  it("still denies a mixed command whose read token targets an existing in-cwd .env", async () => {
+    const resolver = makePathDispatchResolver(
+      {
+        [join(realCwd, ".env")]: makeCheckResult({
+          state: "deny",
+          matchedPattern: "*.env",
+        }),
+      },
+      makeCheckResult({ state: "allow" }),
+    );
+    // new.env is a write-create (exempt) but cat .env reads an existing
+    // secret — the read token still fires.
+    const result = await describeGate(
+      makeTcc({
+        input: { command: "cat .env > new.env" },
+        cwd: realCwd,
+      }),
+      resolver,
+    );
+    expect(result).not.toBeNull();
+    expect(isGateDescriptor(result)).toBe(true);
+    expect((result as GateDescriptor).preCheck?.state).toBe("deny");
   });
 });
