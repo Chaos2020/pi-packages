@@ -13,6 +13,7 @@ const { mockGetActiveAgentName, mockGetActiveAgentNameFromSystemPrompt } =
 vi.mock("../src/active-agent", () => ({
   getActiveAgentName: mockGetActiveAgentName,
   getActiveAgentNameFromSystemPrompt: mockGetActiveAgentNameFromSystemPrompt,
+  resolveActiveAgentName: () => null,
 }));
 
 // ── Test helpers ───────────────────────────────────────────────────────────

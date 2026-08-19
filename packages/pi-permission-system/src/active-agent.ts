@@ -70,3 +70,25 @@ export function getActiveAgentNameFromSystemPrompt(
 
   return normalizeAgentName(match[1]);
 }
+
+/**
+ * Resolve the active agent name with an env fallback for orchestrator-launched
+ * agents (GigaPie supervisor injects GIGAPIE_AGENT_NAME; pi-agent-router injects
+ * the `<active_agent>` tag into the system prompt instead). Returns null when
+ * neither source is present, which keeps the global scope authoritative.
+ */
+export function resolveActiveAgentName(
+  ctx: ActiveAgentContext,
+  systemPrompt: string | undefined,
+): string | null {
+  const fromSession = getActiveAgentName(ctx);
+  if (fromSession) {
+    return fromSession;
+  }
+  const fromSystemPrompt = getActiveAgentNameFromSystemPrompt(systemPrompt);
+  if (fromSystemPrompt) {
+    return fromSystemPrompt;
+  }
+  const fromEnv = process.env.GIGAPIE_AGENT_NAME;
+  return normalizeAgentName(fromEnv);
+}

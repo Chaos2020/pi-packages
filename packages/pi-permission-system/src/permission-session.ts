@@ -3,6 +3,7 @@ import type { ForwardingController } from "#src/authority/forwarding-manager";
 import {
   getActiveAgentName,
   getActiveAgentNameFromSystemPrompt,
+  resolveActiveAgentName,
 } from "./active-agent";
 import type { AuthorizerSelectionLifecycle } from "./authority/authorizer-selection";
 import type { ShellToolsConfig } from "./config-schema";
@@ -165,6 +166,13 @@ export class PermissionSession implements ToolCallGateInputs {
     if (fromSystemPrompt) {
       this.knownAgentName = fromSystemPrompt;
       return fromSystemPrompt;
+    }
+    // GigaPie supervisor 注入 GIGAPIE_AGENT_NAME（2026-08-19）：无 <active_agent>
+    // tag 时回退 env，使 per-agent 权限（~/.pi/agent/agents/<name>.md）生效。
+    const fromEnv = resolveActiveAgentName(ctx, systemPrompt);
+    if (fromEnv) {
+      this.knownAgentName = fromEnv;
+      return fromEnv;
     }
     return this.knownAgentName;
   }
